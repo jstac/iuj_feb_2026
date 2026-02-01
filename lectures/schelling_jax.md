@@ -183,13 +183,13 @@ Note that we use `distances.at[i].set(jnp.inf)` instead of `distances[i] = jnp.i
 because JAX arrays are immutable. This returns a new array with the value at
 index `i` set to infinity.
 
-### Checking Happiness
+### Checking Unhappiness
 
 ```{code-cell} ipython3
 @jit
-def is_happy(loc, agent_type, agent_idx, locations, types):
+def is_unhappy(loc, agent_type, agent_idx, locations, types):
     """
-    True if an agent at loc would have enough same-type neighbors.
+    True if an agent at loc would NOT have enough same-type neighbors.
 
     Parameters
     ----------
@@ -207,13 +207,13 @@ def is_happy(loc, agent_type, agent_idx, locations, types):
     neighbors = get_neighbors(loc, agent_idx, locations)
     neighbor_types = types[neighbors]
     num_same = jnp.sum(neighbor_types == agent_type)
-    return num_same >= require_same_type
+    return num_same < require_same_type
 ```
 
 This function takes the location and type as explicit arguments, rather than
 looking them up from the arrays. This design allows us to test hypothetical
 locations without modifying the `locations` array — useful when an agent is
-searching for a happy location.
+searching for a new location.
 
 ### Counting Happy Agents
 
@@ -223,19 +223,19 @@ def count_happy(locations, types):
     """
     Count the number of happy agents.
 
-    We use vmap to vectorize is_happy across all agents, checking them
+    We use vmap to vectorize is_unhappy across all agents, checking them
     in parallel rather than sequentially.
     """
     def check_agent(i):
-        return is_happy(locations[i], types[i], i, locations, types)
+        return ~is_unhappy(locations[i], types[i], i, locations, types)
 
     all_happy = vmap(check_agent)(jnp.arange(n))
     return jnp.sum(all_happy)
 ```
 
-Here we use `vmap` (vectorized map) to apply `is_happy` to all agents in
-parallel. Instead of looping through agents one by one, `vmap` transforms
-`is_happy` into a function that operates on batches of inputs simultaneously.
+Here we use `vmap` (vectorized map) to check all agents in parallel. Instead of
+looping through agents one by one, `vmap` transforms the check into a batched
+operation.
 
 The pattern `vmap(lambda i: f(i, ...))(indices)` is common in JAX — it says
 "apply this function to each index in parallel."
@@ -260,7 +260,7 @@ def update_agent(i, locations, types, key):
 
     def cond_fn(state):
         loc, key = state
-        return ~is_happy(loc, agent_type, i, locations, types)
+        return is_unhappy(loc, agent_type, i, locations, types)
 
     def body_fn(state):
         _, key = state
@@ -283,7 +283,7 @@ Let's break down the key JAX concepts here:
    need to "split" the key to get new randomness. Each split produces two new
    keys: one to use now, one to save for later.
 
-3. **Testing without updating**: By passing `loc` directly to `is_happy`, we
+3. **Testing without updating**: By passing `loc` directly to `is_unhappy`, we
    can test candidate locations without modifying the `locations` array. This
    avoids creating new arrays inside the loop, improving efficiency.
 
@@ -318,8 +318,67 @@ def plot_distribution(locations, types, title):
 
 ## The Simulation
 
+We separate the core simulation loop from the setup and plotting code. This
+makes it easier to optimize or JIT-compile the loop independently.
+
 ```{code-cell} ipython3
-def run_simulation(max_iter=100_000, seed=1234):
+@jit
+def get_unhappy_agents(locations, types):
+    """
+    Find indices and count of all unhappy agents using vectorized computation.
+    """
+    def check_agent(i):
+        return is_unhappy(locations[i], types[i], i, locations, types)
+
+    all_unhappy = vmap(check_agent)(jnp.arange(n))
+    indices = jnp.where(all_unhappy, size=n, fill_value=-1)[0]
+    count = jnp.sum(all_unhappy)
+    return indices, count
+
+
+def simulation_loop(locations, types, key, max_iter):
+    """
+    Run the simulation loop until convergence or max iterations.
+
+    Returns
+    -------
+    locations : array
+        Final agent locations.
+    iteration : int
+        Number of iterations completed.
+    key : PRNGKey
+        Updated random key.
+    """
+    iteration = 0
+    while iteration < max_iter:
+        print(f'Entering iteration {iteration + 1}')
+        iteration += 1
+
+        # Find unhappy agents using vectorized computation
+        unhappy, num_unhappy = get_unhappy_agents(locations, types)
+
+        # Check if everyone is happy
+        if num_unhappy == 0:
+            break
+
+        # Update only the unhappy agents
+        someone_moved = False
+        for j in range(int(num_unhappy)):
+            i = int(unhappy[j])
+            old_loc = locations[i, :]
+            new_loc, key = update_agent(i, locations, types, key)
+            if not jnp.array_equal(old_loc, new_loc):
+                someone_moved = True
+                locations = locations.at[i, :].set(new_loc)
+
+        if not someone_moved:
+            break
+
+    return locations, iteration, key
+```
+
+```{code-cell} ipython3
+def run_simulation(max_iter=100_000, seed=42):
     """
     Run the Schelling simulation using JAX.
     """
@@ -329,25 +388,13 @@ def run_simulation(max_iter=100_000, seed=1234):
 
     plot_distribution(locations, types, 'Initial distribution')
 
-    # Loop until no agent wishes to move
     start_time = time.time()
-    someone_moved = True
-    iteration = 0
-    while someone_moved and iteration < max_iter:
-        print(f'Entering iteration {iteration + 1}')
-        iteration += 1
-        someone_moved = False
-        for i in range(n):
-            old_loc = locations[i, :]
-            new_loc, key = update_agent(i, locations, types, key)
-            if not jnp.array_equal(old_loc, new_loc):
-                someone_moved = True
-                locations = locations.at[i, :].set(new_loc)
+    locations, iteration, key = simulation_loop(locations, types, key, max_iter)
     elapsed = time.time() - start_time
 
     plot_distribution(locations, types, f'Iteration {iteration}')
 
-    if not someone_moved:
+    if iteration < max_iter:
         print(f'Converged in {elapsed:.2f} seconds after {iteration} iterations.')
     else:
         print('Hit iteration bound and terminated.')
@@ -355,12 +402,17 @@ def run_simulation(max_iter=100_000, seed=1234):
     return locations, types
 ```
 
-The main simulation loop is similar to the NumPy version, but with key
-differences for JAX:
+The simulation loop differs from the NumPy version in several ways:
 
-1. We pass and receive the random `key` in each call to `update_agent`
-2. `update_agent` returns the new location, not the whole array
-3. We only update `locations` when an agent actually moves
+1. **Vectorized unhappiness check**: We use `get_unhappy_agents` to identify all
+   unhappy agents in parallel, then only process those agents
+2. We pass and receive the random `key` in each call to `update_agent`
+3. `update_agent` returns the new location, not the whole array
+4. We only update `locations` when an agent actually moves
+
+This hybrid approach uses vectorized computation to identify unhappy agents,
+then processes them sequentially. As the simulation progresses and more agents
+become happy, fewer agents need processing each iteration.
 
 ## Warming Up JAX
 
@@ -368,16 +420,18 @@ Like Numba, JAX compiles functions the first time they're called. Let's warm
 up the functions:
 
 ```{code-cell} ipython3
-# Warm up: run with a small example to trigger compilation
+# Warm up: use actual problem size to trigger compilation
+# (JAX recompiles when array shapes change)
 key = random.PRNGKey(42)
-test_locations = random.uniform(key, shape=(100, 2))
-test_types = jnp.array([0] * 50 + [1] * 50)
+key, init_key = random.split(key)
+test_locations, test_types = initialize_state(init_key)
 
 # Call each function once to compile it
 _ = get_distances(test_locations[0], test_locations)
 _ = get_neighbors(test_locations[0], 0, test_locations)
-_ = is_happy(test_locations[0], test_types[0], 0, test_locations, test_types)
+_ = is_unhappy(test_locations[0], test_types[0], 0, test_locations, test_types)
 _ = count_happy(test_locations, test_types)
+_, _ = get_unhappy_agents(test_locations, test_types)
 key, subkey = random.split(key)
 _, _ = update_agent(0, test_locations, test_types, subkey)
 

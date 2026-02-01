@@ -309,7 +309,7 @@ As in the first lecture, each iteration cycles through all agents in order,
 giving each the opportunity to move:
 
 ```{code-cell} ipython3
-def run_simulation(max_iter=100_000, seed=1234):
+def run_simulation(max_iter=100_000, seed=42):
     """
     Run the Schelling simulation.
 
