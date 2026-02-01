@@ -94,110 +94,71 @@ Now let's rewrite our core functions with Numba. The key change is adding the
 ```{code-cell} ipython3
 @njit
 def get_distances(loc, locations):
-    """
-    Compute the Euclidean distance from one location to all agent locations.
-    """
-    n = locations.shape[0]
-    distances = np.empty(n)
-    for i in range(n):
-        dx = loc[0] - locations[i, 0]
-        dy = loc[1] - locations[i, 1]
-        distances[i] = np.sqrt(dx * dx + dy * dy)
-    return distances
+    " Compute the Euclidean distance from one location to all agent locations. "
+    return np.sum((loc - locations)**2, axis=1)
 ```
 
-Notice that we've replaced `np.linalg.norm(loc - locations, axis=1)` with an
-explicit loop. This might seem like a step backward, but here's the key
-insight:
-
-**In regular Python, loops are slow because of interpreter overhead. But Numba
-compiles the loop to machine code, making it as fast as a C loop.**
-
-Numba works best with simple operations inside loops. Complex NumPy operations
-like `np.linalg.norm` with the `axis` argument aren't always supported, and
-even when they are, explicit loops often perform just as well or better after
-compilation.
+This is the same vectorized calculation as the NumPy version, using broadcasting
+and `np.sum` with `axis=1`. Numba compiles this to efficient machine code.
 
 ### Finding Neighbors
 
 ```{code-cell} ipython3
 @njit
 def get_neighbors(i, locations):
-    """
-    Get indices of the k nearest neighbors to agent i (excluding self).
-    """
+    " Get indices of the k nearest neighbors to agent i (excluding self). "
     loc = locations[i, :]
     distances = get_distances(loc, locations)
-    # Set self-distance to infinity so we don't count ourselves as a neighbor
     distances[i] = np.inf
-    # np.argsort works in Numba
     indices = np.argsort(distances)
     neighbors = indices[:k]
     return neighbors
 ```
 
-This function calls `get_distances`, which is also Numba-compiled. When one
-Numba function calls another, Numba can optimize across the function boundary,
-potentially inlining the code for even better performance.
-
-Note that we set `distances[i] = np.inf` to exclude the agent from their own
-neighbor list, matching the behavior of the class-based implementation.
+This is identical to the NumPy version. Numba compiles the entire call chain
+efficiently.
 
 ### Checking Happiness
 
 ```{code-cell} ipython3
 @njit
 def is_happy(i, locations, types):
-    """
-    True if agent i has at least require_same_type neighbors of the same type.
-    """
+    " True if agent i has at least require_same_type neighbors of the same type. "
     agent_type = types[i]
     neighbors = get_neighbors(i, locations)
-
-    # Count neighbors of the same type
-    num_same = 0
-    for j in range(k):
-        if types[neighbors[j]] == agent_type:
-            num_same += 1
-
+    neighbor_types = types[neighbors]
+    num_same = np.sum(neighbor_types == agent_type)
     return num_same >= require_same_type
 ```
 
-Again, we use an explicit loop instead of `np.sum(neighbor_types == agent_type)`.
-The loop is clear and, after Numba compilation, very fast.
+This is identical to the NumPy version.
 
 ### Counting Happy Agents
 
 ```{code-cell} ipython3
 @njit
 def count_happy(locations, types):
-    """
-    Count the number of happy agents.
-    """
-    num_agents = locations.shape[0]
+    " Count the number of happy agents. "
     happy_count = 0
-    for i in range(num_agents):
-        if is_happy(i, locations, types):
-            happy_count += 1
+    for i in range(n):
+        happy_count += is_happy(i, locations, types)
     return happy_count
 ```
+
+This is identical to the NumPy version.
 
 ### Moving Unhappy Agents
 
 ```{code-cell} ipython3
 @njit
 def update_agent(i, locations, types):
-    """
-    Move agent i to a new location where they are happy.
-    """
+    " Move agent i to a new location where they are happy. "
     while not is_happy(i, locations, types):
         locations[i, 0] = np.random.uniform(0, 1)
         locations[i, 1] = np.random.uniform(0, 1)
 ```
 
-Note that we use `np.random.uniform(0, 1)` instead of
-`numpy.random.uniform()` — Numba has its own random number generator that
-works inside compiled functions.
+This matches the NumPy version, using `np.random.uniform` which Numba supports.
 
 ## Visualization
 
@@ -232,16 +193,10 @@ iteration through all agents, updating unhappy ones:
 ```{code-cell} ipython3
 @njit
 def run_one_iteration(locations, types):
-    """
-    Run one iteration: cycle through all agents, updating unhappy ones.
-
-    Returns True if at least one agent moved.
-    """
-    num_agents = locations.shape[0]
+    " Run one iteration: returns True if at least one agent moved. "
     someone_moved = False
-    for i in range(num_agents):
-        old_x = locations[i, 0]
-        old_y = locations[i, 1]
+    for i in range(n):
+        old_x, old_y = locations[i, 0], locations[i, 1]
         update_agent(i, locations, types)
         if locations[i, 0] != old_x or locations[i, 1] != old_y:
             someone_moved = True
@@ -253,11 +208,7 @@ Now we can compile the entire convergence loop:
 ```{code-cell} ipython3
 @njit
 def run_until_convergence(locations, types, max_iter):
-    """
-    Run the simulation until convergence, fully compiled.
-
-    Returns the number of iterations taken.
-    """
+    " Run the simulation until convergence. Returns the number of iterations. "
     iteration = 0
     someone_moved = True
     while someone_moved and iteration < max_iter:
