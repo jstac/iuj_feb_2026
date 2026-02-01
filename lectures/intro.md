@@ -8,9 +8,7 @@ The Schelling segregation model shows how mild individual preferences can lead t
 
 1. **The basic model** — Understanding the dynamics of racial segregation using Python classes
 2. **NumPy implementation** — Rewriting the model with arrays and functions for clarity and speed
-3. **Numba acceleration** — Using JIT compilation for faster simulations
-4. **JAX basics** — Translating the model to JAX syntax and concepts
-5. **JAX parallel algorithm** — Redesigning the algorithm for GPU parallelism
+3. **JAX implementation** — Translating the model to JAX syntax and concepts
 
 ## Prerequisites
 

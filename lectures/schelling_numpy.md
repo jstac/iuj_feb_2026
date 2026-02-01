@@ -24,7 +24,7 @@ This approach has several advantages:
 
 1. **Simpler code** — no need to understand object-oriented programming
 2. **Faster execution** — NumPy operations are optimized for numerical computation
-3. **Easier to accelerate** — this style of code can be readily sped up with Numba or JAX
+3. **Easier to accelerate** — this style of code can be readily sped up with JAX
 
 Let's start with some imports:
 
@@ -354,29 +354,6 @@ locations, types = run_simulation()
 
 We see the same phenomenon as in the class-based version: starting from a
 random mixed distribution, agents self-organize into segregated clusters.
-
-## Performance Comparison
-
-One advantage of this NumPy-based approach is speed.
-
-Let's time how long it takes to run one iteration (one pass through all agents):
-
-```{code-cell} ipython3
-%%time
-# Set up the initial state
-np.random.seed(1234)
-locations, types = initialize_state()
-
-# Time one iteration (one pass through all agents)
-for i in range(n):
-    update_agent(i, locations, types)
-```
-
-Compare this to the class-based version — the NumPy approach is faster because
-it uses vectorized distance calculations.
-
-This functional style with NumPy arrays is also a good foundation for further
-optimization with Numba or JAX, which we'll explore in subsequent lectures.
 
 ## Exercises
 

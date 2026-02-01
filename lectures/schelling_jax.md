@@ -15,14 +15,13 @@ kernelspec:
 
 ## Overview
 
-In the {doc}`previous lecture <schelling_numba>`, we used Numba to accelerate our
-Schelling model by compiling Python code to machine code.
+In the {doc}`previous lecture <schelling_numpy>`, we rewrote our Schelling model
+using NumPy arrays and functions.
 
 In this lecture, we explore [JAX](https://github.com/google/jax), a library
-developed by Google that takes a different approach to high-performance
-computing.
+developed by Google for high-performance numerical computing.
 
-JAX offers several unique features:
+JAX offers several powerful features:
 
 1. **GPU/TPU acceleration** — JAX can run your code on GPUs and TPUs with
    minimal changes
@@ -30,8 +29,7 @@ JAX offers several unique features:
    (useful for machine learning)
 3. **Functional programming style** — JAX encourages pure functions without
    side effects
-4. **Just-in-time compilation** — Like Numba, JAX can compile functions for
-   faster execution
+4. **Just-in-time compilation** — JAX can compile functions for faster execution
 
 Let's start with some imports:
 
@@ -44,13 +42,13 @@ from jax import random, jit, vmap
 import time
 ```
 
-## How JAX Differs from NumPy and Numba
+## How JAX Differs from NumPy
 
 Before diving into the code, let's understand what makes JAX special.
 
 ### Immutable Arrays
 
-In NumPy and Numba, we often modify arrays in place:
+In NumPy, we often modify arrays in place:
 
 ```python
 # NumPy style (mutable)
@@ -131,7 +129,7 @@ reproducible.
 ## JAX-Compiled Functions
 
 Now let's rewrite our core functions for JAX. We add the `@jit` decorator
-(similar to Numba's `@njit`) to compile functions for faster execution.
+to compile functions for faster execution.
 
 ### Computing Distances
 
@@ -146,9 +144,8 @@ def get_distances(loc, locations):
     return jnp.sum(diff**2, axis=1)
 ```
 
-Notice that we use vectorized operations like in NumPy, rather than explicit
-loops like in Numba. JAX compiles these vectorized operations very efficiently,
-especially when running on GPUs.
+Notice that we use vectorized operations like in NumPy. JAX compiles these
+vectorized operations very efficiently, especially when running on GPUs.
 
 We use `jnp` (JAX NumPy) instead of `np` (NumPy). The functions are similar,
 but `jnp` operations return JAX arrays and can be compiled by JAX's JIT
@@ -215,30 +212,6 @@ looking them up from the arrays. This design allows us to test hypothetical
 locations without modifying the `locations` array — useful when an agent is
 searching for a new location.
 
-### Counting Happy Agents
-
-```{code-cell} ipython3
-@jit
-def count_happy(locations, types):
-    """
-    Count the number of happy agents.
-
-    We use vmap to vectorize is_unhappy across all agents, checking them
-    in parallel rather than sequentially.
-    """
-    def check_agent(i):
-        return ~is_unhappy(locations[i], types[i], i, locations, types)
-
-    all_happy = vmap(check_agent)(jnp.arange(n))
-    return jnp.sum(all_happy)
-```
-
-Here we use `vmap` (vectorized map) to check all agents in parallel. Instead of
-looping through agents one by one, `vmap` transforms the check into a batched
-operation.
-
-The pattern `vmap(lambda i: f(i, ...))(indices)` is common in JAX — it says
-"apply this function to each index in parallel."
 
 ### Moving Unhappy Agents
 
@@ -361,17 +334,10 @@ def simulation_loop(locations, types, key, max_iter):
             break
 
         # Update only the unhappy agents
-        someone_moved = False
         for j in range(int(num_unhappy)):
             i = int(unhappy[j])
-            old_loc = locations[i, :]
             new_loc, key = update_agent(i, locations, types, key)
-            if not jnp.array_equal(old_loc, new_loc):
-                someone_moved = True
-                locations = locations.at[i, :].set(new_loc)
-
-        if not someone_moved:
-            break
+            locations = locations.at[i, :].set(new_loc)
 
     return locations, iteration, key
 ```
@@ -415,8 +381,8 @@ become happy, fewer agents need processing each iteration.
 
 ## Warming Up JAX
 
-Like Numba, JAX compiles functions the first time they're called. Let's warm
-up the functions:
+JAX compiles functions the first time they're called. Let's warm up the
+functions:
 
 ```{code-cell} ipython3
 # Warm up: use actual problem size to trigger compilation
@@ -429,7 +395,6 @@ test_locations, test_types = initialize_state(init_key)
 _ = get_distances(test_locations[0], test_locations)
 _ = get_neighbors(test_locations[0], 0, test_locations)
 _ = is_unhappy(test_locations[0], test_types[0], 0, test_locations, test_types)
-_ = count_happy(test_locations, test_types)
 _, _ = get_unhappy_agents(test_locations, test_types)
 key, subkey = random.split(key)
 _, _ = update_agent(0, test_locations, test_types, subkey)
@@ -444,43 +409,6 @@ Now let's run the simulation:
 ```{code-cell} ipython3
 locations, types = run_simulation()
 ```
-
-## Performance Comparison
-
-Let's time one iteration:
-
-```{code-cell} ipython3
-%%time
-# Set up the initial state
-key = random.PRNGKey(1234)
-key, init_key = random.split(key)
-locations, types = initialize_state(init_key)
-
-# Time one iteration (one pass through all agents)
-for i in range(n):
-    new_loc, key = update_agent(i, locations, types, key)
-    locations = locations.at[i, :].set(new_loc)
-```
-
-On a CPU, JAX's performance is often similar to Numba. The real advantage of
-JAX comes when running on GPUs, where the parallel nature of array operations
-can provide significant speedups for larger problems.
-
-## When to Use JAX vs Numba
-
-Both JAX and Numba can accelerate Python code, but they have different
-strengths:
-
-**Use Numba when:**
-- You need to accelerate existing NumPy code with minimal changes
-- Your code has complex control flow (nested loops, conditionals)
-- You want to stay close to standard Python/NumPy patterns
-
-**Use JAX when:**
-- You want GPU/TPU acceleration
-- You need automatic differentiation (for machine learning)
-- You're comfortable with functional programming patterns
-- You're working on problems that benefit from parallelization
 
 ## Tips for Using JAX
 
@@ -518,18 +446,17 @@ excel at performing the same operation on many data points simultaneously.
 
 ## Summary
 
-JAX provides a powerful alternative to Numba for accelerating Python code. Its
-key features are:
+JAX provides a powerful framework for accelerating Python code. Its key features
+are:
 
 - **Immutable arrays** that encourage functional programming
 - **Explicit random key management** for reproducibility
 - **JIT compilation** via the `@jit` decorator
 - **GPU/TPU support** for hardware acceleration
 
-While JAX requires more significant code changes than Numba (due to its
-functional style), it offers unique capabilities like automatic differentiation
-and seamless GPU acceleration that make it particularly valuable for machine
-learning and large-scale numerical computing.
+JAX's functional style and unique capabilities like automatic differentiation
+and seamless GPU acceleration make it particularly valuable for machine learning
+and large-scale numerical computing.
 
 To fully benefit from these capabilities, algorithms often need to be
 restructured for parallelism — as we'll see in the next lecture.
