@@ -263,9 +263,8 @@ Here's how this works:
 def plot_distribution(locations, types, title):
     " Plot the distribution of agents. "
     fig, ax = plt.subplots()
-    plot_args = {'markersize': 6, 'alpha': 0.8}
-    ax.set_facecolor('azure')
-    colors = 'orange', 'green'
+    plot_args = {'markersize': 6, 'alpha': 0.8, 'markeredgecolor': 'black', 'markeredgewidth': 0.5}
+    colors = 'darkorange', 'green'
     for agent_type, color in zip((0, 1), colors):
         idx = (types == agent_type)
         ax.plot(locations[idx, 0],

@@ -6,5 +6,4 @@ parts:
   chapters:
   - file: schelling
   - file: schelling_numpy
-  - file: schelling_numba
   - file: schelling_jax

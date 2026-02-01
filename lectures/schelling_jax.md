@@ -302,9 +302,8 @@ def plot_distribution(locations, types, title):
     types_np = np.asarray(types)
 
     fig, ax = plt.subplots()
-    plot_args = {'markersize': 6, 'alpha': 0.8}
-    ax.set_facecolor('azure')
-    colors = 'orange', 'green'
+    plot_args = {'markersize': 6, 'alpha': 0.8, 'markeredgecolor': 'black', 'markeredgewidth': 0.5}
+    colors = 'darkorange', 'green'
     for agent_type, color in zip((0, 1), colors):
         idx = (types_np == agent_type)
         ax.plot(locations_np[idx, 0],

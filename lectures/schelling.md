@@ -148,73 +148,72 @@ We continue to cycle until no one wishes to move.
 
 Let's now implement and run this simulation.
 
-In what follows, agents are modeled as [objects](https://python-programming.quantecon.org/python_oop.html).
+In what follows, agents are modeled as [objects](https://python-programming.quantecon.org/python_oop.html) that store
 
-Here's an indication of their structure:
 
 ```{code-block} none
-* Data:
-
     * type (green or orange)
     * location
-
-* Methods:
-
-    * determine whether happy or not given locations of other agents
-    * If not happy, move
-        * find a new location where happy
 ```
 
-Let's build them.
+Here's a class that we can use to instantiate agents from:
 
 ```{code-cell} ipython3
 class Agent:
 
     def __init__(self, type):
         self.type = type
-        self.draw_location()
-
-    def draw_location(self):
         self.location = uniform(0, 1), uniform(0, 1)
+```
 
-    def get_distance(self, other):
-        "Computes the euclidean distance between self and other agent."
-        a = (self.location[0] - other.location[0])**2
-        b = (self.location[1] - other.location[1])**2
-        return sqrt(a + b)
 
-    def happy(self,
-                agents,                                    # List of other agents
-                num_neighbors=num_neighbors,               # No. of agents viewed as neighbors
-                require_same_type=require_same_type):      # How many neighbors must be same type
-        """
-            True if a sufficient number of nearest neighbors are of the same
-            type.
-        """
+Here's a collection of functions that act on agents:
 
-        distances = []
+```{code-cell} ipython3
+def move_agent(agent):
+    "Provide agent with a new location."
+    agent.location = uniform(0, 1), uniform(0, 1)
 
-        # Distances is a list of pairs (d, agent), where d is distance from
-        # agent to self
-        for agent in agents:
-            if self != agent:
-                distance = self.get_distance(agent)
-                distances.append((distance, agent))
 
-        # Sort from smallest to largest, according to distance
-        distances.sort()
+def get_distance(agent, other_agent):
+    "Computes the Euclidean distance between self and other agent."
+    a = agent.location[0] - other_agent.location[0]
+    b = agent.location[1] - other_agent.location[1]
+    return sqrt(a**2 + b**2)
 
-        # Extract the neighboring agents
-        neighbors = [agent for d, agent in distances[:num_neighbors]]
 
-        # Count how many neighbors have the same type as self
-        num_same_type = sum(self.type == agent.type for agent in neighbors)
-        return num_same_type >= require_same_type
+def happy(agent, all_agents):
+    """
+    True if the number of neighbors with the same type as agent is greater than
+    or equal to require_same_type.
+    """
 
-    def update(self, agents):
-        "If not happy, then randomly choose new locations until happy."
-        while not self.happy(agents):
-            self.draw_location()
+    # Set up a list of pairs (distance, other_agent) that records the
+    # distance from agent to all other agents.
+    distances = []
+
+    # Create the list
+    for other_agent in all_agents:
+        if other_agent != agent:
+            distance = get_distance(other_agent, agent)
+            distances.append((distance, other_agent))
+
+    # Sort from smallest to largest, according to distance
+    distances.sort()
+
+    # Extract the list of neighboring agents
+    neighbor_pairs = distances[:num_neighbors]
+    neighbors = [neighbor for d, neighbor in neighbor_pairs]
+
+    # Count how many neighbors have the same type as self
+    num_same_type = sum(agent.type == neighbor.type for neighbor in neighbors)
+    return num_same_type >= require_same_type
+
+
+def relocate(agent, all_agents):
+    "If not happy, then randomly choose new locations until happy."
+    while not happy(agent, all_agents):
+        move_agent(agent)
 ```
 
 Here's some code that takes a list of agents and produces a plot showing their
@@ -238,10 +237,9 @@ def plot_distribution(agents, cycle_num):
             x_values_1.append(x)
             y_values_1.append(y)
     fig, ax = plt.subplots()
-    plot_args = {'markersize': 6, 'alpha': 0.8}
-    ax.set_facecolor('azure')
+    plot_args = {'markersize': 6, 'alpha': 0.8, 'markeredgecolor': 'black', 'markeredgewidth': 0.5}
     ax.plot(x_values_0, y_values_0,
-        'o', markerfacecolor='orange', **plot_args)
+        'o', markerfacecolor='darkorange', **plot_args)
     ax.plot(x_values_1, y_values_1,
         'o', markerfacecolor='green', **plot_args)
     ax.set_title(f'Cycle {cycle_num-1}')
@@ -258,12 +256,15 @@ The main loop cycles through all agents until no one wishes to move.
 **Output:** Final distribution of agents
 
 1. Plot initial distribution
-2. Set `someone_moved` $\leftarrow$ True
-3. While `someone_moved` is True:
-    1. Set `someone_moved` $\leftarrow$ False
+2. Set `count` $\leftarrow$ 1
+3. While `count` < `max_iter`:
+    1. Set `number_of_moves` $\leftarrow$ 0
     2. For each agent:
-        1. If agent is unhappy, relocate using {prf:ref}`move_algo`
-        2. Set `someone_moved` $\leftarrow$ True
+        1. Record current location
+        2. Relocate agent using {prf:ref}`move_algo`
+        3. If location changed, increment `number_of_moves`
+    3. Increment `count`
+    4. If `number_of_moves` = 0, exit loop
 4. Plot final distribution
 
 ```
@@ -279,33 +280,38 @@ def run_simulation(num_of_type_0=num_of_type_0,
     # Set the seed for reproducibility
     seed(set_seed)
 
-    # Create a list of agents of type 0
-    agents = [Agent(0) for i in range(num_of_type_0)]
-    # Append a list of agents of type 1
-    agents.extend(Agent(1) for i in range(num_of_type_1))
+    # Create a list of agents 
+    all_agents = []
+    for i in range(num_of_type_0):
+        all_agents.append(Agent(0))
+    for i in range(num_of_type_1):
+        all_agents.append(Agent(1))
 
     # Initialize a counter
     count = 1
 
     # Plot the initial distribution
-    plot_distribution(agents, count)
+    plot_distribution(all_agents, count)
 
     # Loop until no agent wishes to move
     start_time = time.time()
-    someone_moved = True
-    while someone_moved and count < max_iter:
-        print('Entering loop ', count)
-        count += 1
-        someone_moved = False
-        for agent in agents:
+    while count < max_iter:
+        number_of_moves = 0
+        # Offer each agent the chance to relocate
+        for agent in all_agents:
             old_location = agent.location
-            agent.update(agents)
+            relocate(agent, all_agents)
             if agent.location != old_location:
-                someone_moved = True
+                number_of_moves += 1
+        # Print outcome and stop loop if no one moved
+        print(f'Completed loop {count} with {number_of_moves} moves')
+        count += 1
+        if number_of_moves == 0:
+            break
     elapsed = time.time() - start_time
 
     # Plot final distribution
-    plot_distribution(agents, count)
+    plot_distribution(all_agents, count)
 
     if count < max_iter:
         print(f'Converged in {elapsed:.2f} seconds after {count} iterations.')
@@ -347,7 +353,7 @@ agents.extend(Agent(1) for i in range(num_of_type_1))
 
 # Time one iteration (one pass through all agents)
 for agent in agents:
-    agent.update(agents)
+    relocate(agent, agents)
 ```
 
 This gives us a baseline to compare against when we optimize the code in later lectures.
