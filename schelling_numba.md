@@ -224,7 +224,50 @@ def plot_distribution(locations, types, title):
     plt.show()
 ```
 
-## The Simulation
+## The Simulation Loop
+
+We can also JIT-compile the main simulation loop. This function performs one
+iteration through all agents, updating unhappy ones:
+
+```{code-cell} ipython3
+@njit
+def run_one_iteration(locations, types):
+    """
+    Run one iteration: cycle through all agents, updating unhappy ones.
+
+    Returns True if at least one agent moved.
+    """
+    num_agents = locations.shape[0]
+    someone_moved = False
+    for i in range(num_agents):
+        old_x = locations[i, 0]
+        old_y = locations[i, 1]
+        update_agent(i, locations, types)
+        if locations[i, 0] != old_x or locations[i, 1] != old_y:
+            someone_moved = True
+    return someone_moved
+```
+
+Now we can compile the entire convergence loop:
+
+```{code-cell} ipython3
+@njit
+def run_until_convergence(locations, types, max_iter):
+    """
+    Run the simulation until convergence, fully compiled.
+
+    Returns the number of iterations taken.
+    """
+    iteration = 0
+    someone_moved = True
+    while someone_moved and iteration < max_iter:
+        iteration += 1
+        someone_moved = run_one_iteration(locations, types)
+    return iteration
+```
+
+The main simulation function handles initialization and plotting (which can't
+be JIT-compiled), then calls the compiled loop:
 
 ```{code-cell} ipython3
 def run_simulation(max_iter=100_000, seed=1234):
@@ -236,25 +279,15 @@ def run_simulation(max_iter=100_000, seed=1234):
 
     plot_distribution(locations, types, 'Initial distribution')
 
-    # Loop until no agent wishes to move
+    # Run the compiled simulation loop
     start_time = time.time()
-    someone_moved = True
-    iteration = 0
-    while someone_moved and iteration < max_iter:
-        print(f'Entering iteration {iteration + 1}')
-        iteration += 1
-        someone_moved = False
-        for i in range(n):
-            old_loc = locations[i, :].copy()
-            update_agent(i, locations, types)
-            if not np.array_equal(old_loc, locations[i, :]):
-                someone_moved = True
+    iterations = run_until_convergence(locations, types, max_iter)
     elapsed = time.time() - start_time
 
-    plot_distribution(locations, types, f'Iteration {iteration}')
+    plot_distribution(locations, types, f'Iteration {iterations}')
 
-    if not someone_moved:
-        print(f'Converged in {elapsed:.2f} seconds after {iteration} iterations.')
+    if iterations < max_iter:
+        print(f'Converged in {elapsed:.2f} seconds after {iterations} iterations.')
     else:
         print('Hit iteration bound and terminated.')
 
@@ -268,17 +301,20 @@ takes some time. To get accurate timing, we should "warm up" the functions
 first:
 
 ```{code-cell} ipython3
-# Warm up: run with a small example to trigger compilation
+# Warm up: compile all functions using the actual problem size
 np.random.seed(42)
-test_locations = np.random.uniform(size=(100, 2))
-test_types = np.array([0] * 50 + [1] * 50)
+locations, types = initialize_state()
 
-# Call each function once to compile it
-_ = get_distances(test_locations[0], test_locations)
-_ = get_neighbors(0, test_locations)
-_ = is_happy(0, test_locations, test_types)
-_ = count_happy(test_locations, test_types)
-update_agent(0, test_locations, test_types)
+# Compile all the helper functions
+_ = get_distances(locations[0], locations)
+_ = get_neighbors(0, locations)
+_ = is_happy(0, locations, types)
+_ = count_happy(locations, types)
+update_agent(0, locations, types)
+
+# Compile the simulation loop functions
+_ = run_one_iteration(locations, types)
+_ = run_until_convergence(locations, types, max_iter=1)
 
 print("Numba functions compiled and ready!")
 ```
@@ -293,17 +329,21 @@ locations, types = run_simulation()
 
 ## Performance Comparison
 
-Let's time one iteration to compare with the NumPy version:
+Let's time the full simulation to see how fast Numba can be:
 
 ```{code-cell} ipython3
-%%time
 # Set up the initial state
 np.random.seed(1234)
 locations, types = initialize_state()
 
-# Time one iteration (one pass through all agents)
-for i in range(n):
-    update_agent(i, locations, types)
+# Time the full simulation
+start_time = time.time()
+iterations = run_until_convergence(locations, types, max_iter=100_000)
+elapsed = time.time() - start_time
+
+print(f"Converged in {iterations} iterations")
+print(f"Total time: {elapsed:.3f} seconds")
+print(f"Time per iteration: {elapsed/iterations*1000:.2f} ms")
 ```
 
 Compare this to the NumPy version from the previous lecture. Numba should be

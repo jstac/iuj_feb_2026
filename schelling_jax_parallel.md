@@ -19,20 +19,16 @@ In the {doc}`previous lecture <schelling_jax>`, we translated the Schelling mode
 to JAX, keeping the same sequential algorithm. While that demonstrated JAX syntax
 and concepts, it didn't leverage JAX's main strength: **parallel computation**.
 
-The original algorithm updates agents one at a time, with each agent potentially
-making many moves until they find a happy location. This sequential structure
-doesn't map well to parallel hardware like GPUs.
-
 In this lecture, we redesign the algorithm to be **fully parallelizable**. The
-key insight is to update all unhappy agents simultaneously rather than one at a
-time.
+key insight is to have all agents evaluate multiple candidate locations
+simultaneously, then update all locations at once.
 
 ```{code-cell} ipython3
 import matplotlib.pyplot as plt
 import numpy as np
 import jax
 import jax.numpy as jnp
-from jax import random, jit, vmap
+from jax import random, jit, vmap, lax
 import time
 ```
 
@@ -43,28 +39,19 @@ Our modified algorithm works as follows:
 ```{prf:algorithm} Parallel Schelling Update
 :label: parallel_schelling
 
-**Input:** Agent locations, types, random key
+**Input:** Agent locations, types, random key, number of candidates K
 
 **Output:** Updated locations
 
-1. Compute happiness for all agents in parallel
-2. Generate one random candidate location for each unhappy agent
-3. For each unhappy agent, check if the candidate location would make them happy
-   (using current locations of all other agents)
-4. Update locations: agents who found a happy spot move; others stay
-5. Repeat until no one moves or max iterations reached
+1. Generate K random candidate locations for each agent
+2. For each agent, check happiness at current location and all K candidates
+3. Each agent moves to the first candidate that makes them happy (if any)
+4. Repeat until no one moves or max iterations reached
 
 ```
 
-The critical difference from the original algorithm:
-
-- **Original**: Agents move sequentially. When agent $i$ moves, agent $i+1$ sees
-  the updated location.
-- **Parallel**: All agents "explore" simultaneously using the same snapshot of
-  locations. Then all successful moves happen at once.
-
-This changes the dynamics slightly but makes the algorithm embarrassingly
-parallel — perfect for GPUs.
+The key to efficiency: **no while loops inside vectorized operations**. Instead,
+we generate a fixed number of candidates and check them all in parallel.
 
 ## Parameters
 
@@ -74,6 +61,7 @@ num_of_type_1 = 1000    # number of agents of type 1 (green)
 n = num_of_type_0 + num_of_type_1  # total number of agents
 k = 10                  # number of agents regarded as neighbors
 require_same_type = 5   # want >= require_same_type neighbors of the same type
+num_candidates = 10     # candidate locations per agent per iteration
 ```
 
 ## Initialization
@@ -86,132 +74,54 @@ def initialize_state(key):
     return locations, types
 ```
 
-## Vectorized Helper Functions
+## Checking Happiness at a Location
 
-The key to parallelization is writing functions that operate on entire arrays
-at once, rather than looping through elements.
-
-### Computing All Pairwise Distances
-
-First, we compute a full distance matrix between all pairs of agents:
+First, a function to check if an agent would be happy at a given location:
 
 ```{code-cell} ipython3
 @jit
-def compute_all_distances(locations):
+def is_happy_at_location(agent_idx, loc, locations, types):
     """
-    Compute the distance matrix between all pairs of agents.
+    Check if agent would be happy at the given location.
 
-    Returns an (n, n) matrix where entry (i, j) is the distance
-    between agent i and agent j.
-    """
-    # locations has shape (n, 2)
-    # We want distances[i, j] = ||locations[i] - locations[j]||
-
-    # Expand dimensions for broadcasting:
-    # locations[:, None, :] has shape (n, 1, 2)
-    # locations[None, :, :] has shape (1, n, 2)
-    # Subtraction broadcasts to shape (n, n, 2)
-    diff = locations[:, None, :] - locations[None, :, :]
-    return jnp.sqrt(jnp.sum(diff ** 2, axis=2))
-```
-
-This is a classic JAX pattern: instead of nested loops, we use broadcasting to
-compute all pairwise operations at once.
-
-### Finding All Neighbors
-
-```{code-cell} ipython3
-@jit
-def compute_all_neighbors(distances):
-    """
-    For each agent, find the indices of their k nearest neighbors.
-
-    Returns an (n, k) array where row i contains the indices of
-    agent i's k nearest neighbors (excluding self).
-    """
-    num_agents = distances.shape[0]
-    # Set diagonal to infinity so agents don't count as their own neighbor
-    distances_no_self = distances + jnp.diag(jnp.full(num_agents, jnp.inf))
-    # argsort each row and take first k
-    sorted_indices = jnp.argsort(distances_no_self, axis=1)
-    return sorted_indices[:, :k]
-```
-
-### Computing Happiness for All Agents
-
-```{code-cell} ipython3
-@jit
-def compute_all_happiness(neighbors, types):
-    """
-    Compute happiness for all agents in parallel.
-
-    Returns a boolean array of length n, where entry i is True if
-    agent i is happy.
-    """
-    # neighbors has shape (n, k)
-    # types has shape (n,)
-
-    # Get types of all neighbors: shape (n, k)
-    neighbor_types = types[neighbors]
-
-    # Compare to each agent's own type: shape (n, k)
-    # types[:, None] broadcasts to match neighbor_types
-    same_type = neighbor_types == types[:, None]
-
-    # Count same-type neighbors for each agent: shape (n,)
-    num_same = jnp.sum(same_type, axis=1)
-
-    return num_same >= require_same_type
-```
-
-## Computing Happiness at a New Location
-
-Here's where it gets interesting. We need to check if an agent *would be* happy
-at a candidate location, without actually moving them there yet.
-
-```{code-cell} ipython3
-@jit
-def would_be_happy(agent_idx, candidate_loc, locations, types):
-    """
-    Check if agent would be happy at candidate_loc.
-
-    This computes distances from candidate_loc to all OTHER agents
-    (using their current locations), finds the k nearest, and checks
-    if enough are the same type.
+    Uses current locations of all OTHER agents.
     """
     agent_type = types[agent_idx]
 
-    # Distance from candidate location to all agents
-    diff = candidate_loc - locations
+    # Compute distances from loc to all agents
+    diff = loc - locations
     distances = jnp.sqrt(jnp.sum(diff ** 2, axis=1))
 
-    # Exclude self (set distance to self to infinity)
+    # Exclude self
     distances = distances.at[agent_idx].set(jnp.inf)
 
-    # Find k nearest neighbors at the candidate location
+    # Find k nearest neighbors
     neighbor_indices = jnp.argsort(distances)[:k]
     neighbor_types = types[neighbor_indices]
-
-    # Count same-type neighbors
     num_same = jnp.sum(neighbor_types == agent_type)
 
     return num_same >= require_same_type
 ```
 
-Now we vectorize this to check all unhappy agents at once:
+## Vectorized Happiness Checking
+
+We need to check happiness for:
+- Each agent at their current location
+- Each agent at each of K candidate locations
+
+We use nested `vmap` to vectorize these operations:
 
 ```{code-cell} ipython3
-# vmap over the agent index and candidate location
-would_be_happy_batch = vmap(would_be_happy, in_axes=(0, 0, None, None))
+# Check one agent at multiple locations
+# vmap over locations (axis 0), agent_idx fixed
+is_happy_at_locations = vmap(is_happy_at_location, in_axes=(None, 0, None, None))
+
+# Check all agents, each at multiple locations
+# vmap over agent_idx and their candidate locations
+is_happy_all_agents = vmap(is_happy_at_locations, in_axes=(0, 0, None, None))
 ```
 
-The `vmap` function is JAX's way of automatically vectorizing a function. Here
-we're saying: "run `would_be_happy` for multiple agents in parallel, where
-`agent_idx` and `candidate_loc` vary but `locations` and `types` are shared."
-
 ## The Parallel Update Step
-
-Now we can write the main update function:
 
 ```{code-cell} ipython3
 @jit
@@ -219,45 +129,90 @@ def parallel_update(locations, types, key):
     """
     Perform one parallel update step.
 
-    Returns:
-        new_locations: Updated location array
-        num_moved: Number of agents who moved
-        key: New random key
+    Each agent generates num_candidates random locations and moves to the
+    first one that makes them happy (if any).
+
+    Returns
+    -------
+    new_locations : array (n, 2)
+        Updated locations
+    num_moved : int
+        Number of agents who moved
+    key : PRNGKey
+        Updated random key
     """
     num_agents = locations.shape[0]
 
-    # Step 1: Compute current happiness for all agents
-    distances = compute_all_distances(locations)
-    neighbors = compute_all_neighbors(distances)
-    happy = compute_all_happiness(neighbors, types)
-
-    # Step 2: Generate candidate locations for ALL agents
-    # (We'll only use them for unhappy agents, but generating for all
-    # is simpler and JAX will optimize away unused computation)
-    key, subkey = random.split(key)
-    candidates = random.uniform(subkey, shape=(num_agents, 2))
-
-    # Step 3: For efficiency, we check all agents but only unhappy ones matter
+    # Check current happiness for all agents
     all_indices = jnp.arange(num_agents)
-    would_be_happy_at_candidate = would_be_happy_batch(
-        all_indices, candidates, locations, types
+    current_happy = vmap(is_happy_at_location, in_axes=(0, 0, None, None))(
+        all_indices, locations, locations, types
     )
 
-    # Step 4: Determine who moves
-    # An agent moves if: (1) they are unhappy, and (2) candidate makes them happy
-    should_move = (~happy) & would_be_happy_at_candidate
+    # Generate candidates: shape (n, num_candidates, 2)
+    key, subkey = random.split(key)
+    candidates = random.uniform(subkey, shape=(num_agents, num_candidates, 2))
 
-    # Step 5: Update locations
-    # Use jnp.where to select new or old location for each agent
+    # Check happiness at all candidates for all agents: shape (n, num_candidates)
+    happy_at_candidates = is_happy_all_agents(all_indices, candidates, locations, types)
+
+    # For each agent, find the first happy candidate (if any)
+    # Use argmax on boolean array - returns index of first True, or 0 if all False
+    # We need to handle the case where no candidate is happy
+
+    # Create mask: agent needs to move AND at least one candidate is happy
+    needs_move = ~current_happy
+    has_happy_candidate = jnp.any(happy_at_candidates, axis=1)
+    will_move = needs_move & has_happy_candidate
+
+    # Find first happy candidate for each agent
+    # argmax returns first True index; if all False, returns 0
+    first_happy_idx = jnp.argmax(happy_at_candidates, axis=1)
+
+    # Get the selected candidate location for each agent
+    selected_candidates = candidates[all_indices, first_happy_idx, :]
+
+    # Update locations: move if will_move, otherwise stay
     new_locations = jnp.where(
-        should_move[:, None],  # condition, broadcast to (num_agents, 2)
-        candidates,             # if True: use candidate
-        locations               # if False: keep current
+        will_move[:, None],
+        selected_candidates,
+        locations
     )
 
-    num_moved = jnp.sum(should_move)
+    num_moved = jnp.sum(will_move)
 
     return new_locations, num_moved, key
+```
+
+## Fully Compiled Simulation Loop
+
+```{code-cell} ipython3
+@jit
+def run_until_convergence(locations, types, key, max_iter):
+    """
+    Run the simulation until convergence, fully compiled.
+    """
+    def cond_fn(state):
+        """Continue while someone moved and under max iterations."""
+        locations, key, iteration, num_moved = state
+        return (num_moved > 0) & (iteration < max_iter)
+
+    def body_fn(state):
+        """Perform one iteration."""
+        locations, key, iteration, num_moved = state
+        locations, num_moved, key = parallel_update(locations, types, key)
+        return locations, key, iteration + 1, num_moved
+
+    # Run first iteration to initialize
+    locations, num_moved, key = parallel_update(locations, types, key)
+    init_state = (locations, key, 1, num_moved)
+
+    # Run until convergence
+    final_locations, final_key, iterations, _ = lax.while_loop(
+        cond_fn, body_fn, init_state
+    )
+
+    return final_locations, iterations, final_key
 ```
 
 ## Visualization
@@ -296,42 +251,35 @@ def run_simulation(max_iter=1000, seed=1234):
 
     plot_distribution(locations, types, 'Initial distribution')
 
-    # Run until convergence
+    # Run fully compiled simulation
     start_time = time.time()
-    for iteration in range(max_iter):
-        locations, num_moved, key = parallel_update(locations, types, key)
-        print(f'Iteration {iteration + 1}: {num_moved} agents moved')
-
-        if num_moved == 0:
-            break
-
+    final_locations, iterations, key = run_until_convergence(
+        locations, types, key, max_iter
+    )
+    # Block until computation complete for accurate timing
+    final_locations.block_until_ready()
     elapsed = time.time() - start_time
 
-    plot_distribution(locations, types, f'After {iteration + 1} iterations')
+    plot_distribution(final_locations, types, f'After {iterations} iterations')
 
-    if num_moved == 0:
-        print(f'Converged in {elapsed:.2f} seconds after {iteration + 1} iterations.')
-    else:
-        print(f'Did not converge after {max_iter} iterations.')
+    print(f'Converged in {elapsed:.2f} seconds after {iterations} iterations.')
 
-    return locations, types
+    return final_locations, types
 ```
 
 ## Warming Up JAX
 
+JAX compiles functions on first call and **recompiles when array shapes change**.
+We warm up with the actual problem size:
+
 ```{code-cell} ipython3
-# Warm up with a smaller problem
+# Warm up with ACTUAL problem size
 key = random.PRNGKey(42)
-test_locations = random.uniform(key, shape=(100, 2))
-test_types = jnp.array([0] * 50 + [1] * 50)
+key, init_key = random.split(key)
+warmup_locations, warmup_types = initialize_state(init_key)
 
-# Compile the main functions
-distances = compute_all_distances(test_locations)
-neighbors = compute_all_neighbors(distances)
-happy = compute_all_happiness(neighbors, test_types)
-
-key, subkey = random.split(key)
-_ = parallel_update(test_locations, test_types, subkey)
+# Compile by running once
+_, _, _ = run_until_convergence(warmup_locations, warmup_types, key, max_iter=3)
 
 print("JAX functions compiled and ready!")
 ```
@@ -344,58 +292,66 @@ locations, types = run_simulation()
 
 ## Performance Comparison
 
-Let's time the parallel update:
+Let's time the simulation:
 
 ```{code-cell} ipython3
-%%time
-# Set up
+# Fresh run with timing
 key = random.PRNGKey(1234)
 key, init_key = random.split(key)
 locations, types = initialize_state(init_key)
 
-# Time 10 iterations
-for _ in range(10):
-    locations, num_moved, key = parallel_update(locations, types, key)
+start_time = time.time()
+final_locations, iterations, _ = run_until_convergence(
+    locations, types, key, max_iter=1000
+)
+final_locations.block_until_ready()
+elapsed = time.time() - start_time
+
+print(f"Converged in {iterations} iterations")
+print(f"Total time: {elapsed:.3f} seconds")
+print(f"Time per iteration: {elapsed/int(iterations)*1000:.2f} ms")
 ```
 
-The parallel algorithm processes all 2000 agents simultaneously in each
-iteration. On a GPU, this would be significantly faster than the sequential
-version.
+## Why This Approach Works
+
+The key insight is avoiding `while` loops inside `vmap`. When you `vmap` over a
+`while_loop`, JAX must run all parallel loops for the maximum number of
+iterations needed by any single element. This is wasteful if iterations vary.
+
+Instead, we:
+1. Generate a **fixed number** of candidates (e.g., 50)
+2. Check **all candidates** for **all agents** in one batched operation
+3. Use `argmax` to find the first happy candidate
+
+This gives predictable cost: O(n × num_candidates) happiness checks per iteration,
+all fully parallelizable.
 
 ## Trade-offs
 
-The parallel algorithm has different dynamics from the original:
-
 **Advantages:**
-- Fully parallelizable — can leverage GPUs effectively
-- Predictable iteration time (no variable-length while loops)
-- Each iteration does a fixed amount of work
+- No while loops inside vmap — predictable parallel cost
+- Fully vectorized happiness checking
+- Entire simulation loop is JIT-compiled
 
-**Differences in dynamics:**
-- Agents only get one chance to move per iteration (vs. moving until happy)
-- All agents see the same "snapshot" of locations during exploration
-- May take more iterations to converge
-- Agents who can't find a happy spot in one try must wait for the next iteration
-
-**When this matters:**
-- In the original algorithm, early movers can "claim" good spots before later
-  agents explore
-- In the parallel algorithm, multiple agents might simultaneously try to move
-  to similar areas, creating new conflicts
-
-Despite these differences, both algorithms demonstrate the same fundamental
-phenomenon: mild preferences lead to strong segregation.
+**Considerations:**
+- More candidates = better chance of finding happy spot, but more computation
+- If num_candidates is too small, convergence may be slow
+- Memory scales as O(n × num_candidates)
 
 ## Summary
 
-By restructuring the Schelling model for parallel execution, we can effectively
-leverage JAX's strengths:
+The key techniques in this parallel implementation:
 
-- **Vectorized distance computation** using broadcasting
-- **Parallel happiness checking** for all agents simultaneously
-- **Batched candidate evaluation** using `vmap`
-- **Simultaneous location updates** using `jnp.where`
+1. **Fixed candidate count**: Generate K candidates per agent upfront, avoiding
+   variable-length while loops inside vectorized operations.
 
-This pattern — restructuring algorithms to operate on entire arrays rather than
-individual elements — is the key to getting good performance from JAX and GPUs
-in general.
+2. **Nested vmap**: Use `vmap(vmap(...))` to check all agents × all candidates
+   in a single batched operation.
+
+3. **Vectorized selection**: Use `argmax` to find the first happy candidate for
+   each agent, avoiding explicit loops.
+
+4. **Full JIT compilation**: The entire simulation loop uses `lax.while_loop`.
+
+5. **Proper benchmarking**: Use `block_until_ready()` for accurate timing, and
+   warm up at actual problem size.
