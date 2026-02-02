@@ -1,26 +1,17 @@
 name: quantecon
 channels:
-  - conda-forge
+  - default
 dependencies:
   - python=3.13
-  - anaconda
+  - anaconda=2025.12
   - pip
-  - numba
-  - numpy
-  - scipy
-  - matplotlib
-  - pandas
-  - jupyterlab
-  - ipython
-  - ipykernel
-  - jupyter-book>=1.0.0,<2
-  - sphinx-proof
-  - sphinx_exercise
-  - sphinx_togglebutton
-  - sphinx-multitoc-numbering
-  - sphinxcontrib-bibtex
-  - quantecon_book_theme>=0.8.0
-  - sphinx-tojupyter
-  - docutils
   - pip:
-    - quantecon
+    - jupyter-book>=1.0.4post1,<2.0
+    - quantecon-book-theme==0.15.1
+    - sphinx-tojupyter==0.6.0
+    - sphinxext-rediraffe==0.3.0
+    - sphinx-exercise==1.2.1
+    - sphinx-proof==0.3.0
+    - sphinxcontrib-youtube==1.4.1
+    - sphinx-togglebutton==0.3.2
+    - sphinx-reredirects==1.1.0
