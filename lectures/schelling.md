@@ -85,15 +85,15 @@ $0 < x, y < 1$.
 
 ### Preferences
 
-We will say that an agent is **happy** if up to 6 of her 10 nearest neighbors are of a different type.
+We will say that an agent is 
 
-She is **unhappy** if 7 or more of her 10 nearest neighbors are of a different
-type.
+* **happy** if $k \leq 6$ of her 10 nearest neighbors are of a different type.
+* **unhappy** if $k > 6$ her 10 nearest neighbors are of a different type.
 
 For example,
 
 *  if an agent is orange and 6 of her 10 nearest neighbors are green, then she is happy.
-*  if an agent is green and 7 of her 10 nearest neighbors are orange, then she is unhappy.
+*  if an agent is orange and 7 of her 10 nearest neighbors are green, then she is unhappy.
 
 'Nearest' is in terms of [Euclidean distance](https://en.wikipedia.org/wiki/Euclidean_distance).
 
@@ -104,6 +104,8 @@ They are perfectly happy if 60% of their neighbors are of the other color.
 Let's set up the parameters for our simulation:
 
 ```{code-cell} ipython3
+seed(1234)              # set seed for reproducibility
+
 num_of_type_0 = 1000    # number of agents of type 0 (orange)
 num_of_type_1 = 1000    # number of agents of type 1 (green)
 num_neighbors = 10      # number of agents viewed as neighbors
@@ -144,9 +146,9 @@ We continue to cycle until no one wishes to move.
 
 +++
 
-## Results
+## Main Loop
 
-Let's now implement and run this simulation.
+Let's write the code to run this simulation.
 
 In what follows, agents are modeled as [objects](https://python-programming.quantecon.org/python_oop.html) that store
 
@@ -184,8 +186,10 @@ def get_distance(agent, other_agent):
 
 def happy(agent, all_agents):
     """
-    True if the number of neighbors with a different type is not more than
-    max_other_type.
+    Test happiness of agent, givel locations of others (all_agents).
+
+    Return true if the number of neighbors with a different type is not more
+    than max_other_type.
     """
 
     # Set up a list of pairs (distance, other_agent) that records the
@@ -224,8 +228,8 @@ Orange agents are represented by orange dots and green ones are represented by
 green dots.
 
 ```{code-cell} ipython3
-def plot_distribution(agents, cycle_num):
-    "Plot the distribution of agents after cycle_num rounds of the loop."
+def plot_distribution(agents, round_num):
+    "Plot the distribution of agents after round_num rounds of the loop."
     x_values_0, y_values_0 = [], []
     x_values_1, y_values_1 = [], []
     # == Obtain locations of each type == #
@@ -238,12 +242,17 @@ def plot_distribution(agents, cycle_num):
             x_values_1.append(x)
             y_values_1.append(y)
     fig, ax = plt.subplots()
-    plot_args = {'markersize': 6, 'alpha': 0.8, 'markeredgecolor': 'black', 'markeredgewidth': 0.5}
+    plot_args = {
+        'markersize': 6,
+        'alpha': 0.8,
+        'markeredgecolor': 'black',
+        'markeredgewidth': 0.5
+    }
     ax.plot(x_values_0, y_values_0,
         'o', markerfacecolor='darkorange', **plot_args)
     ax.plot(x_values_1, y_values_1,
         'o', markerfacecolor='green', **plot_args)
-    ax.set_title(f'Cycle {cycle_num-1}')
+    ax.set_title(f'Round {round_num}')
     plt.show()
 ```
 
@@ -256,43 +265,26 @@ The main loop cycles through all agents until no one wishes to move.
 
 **Output:** Final distribution of agents
 
-1. Plot initial distribution
-2. Set `count` $\leftarrow$ 1
-3. While `count` < `max_iter`:
+1. Set `count` $\leftarrow$ 1
+2. While `count` < `max_iter`:
     1. Set `number_of_moves` $\leftarrow$ 0
     2. For each agent:
         1. Record current location
-        2. Relocate agent using {prf:ref}`move_algo`
+        2. If agent is unhappy, relocate using {prf:ref}`move_algo`
         3. If location changed, increment `number_of_moves`
-    3. Increment `count`
-    4. If `number_of_moves` = 0, exit loop
-4. Plot final distribution
+    3. Plot distribution
+    4. Increment `count`
+    5. If `number_of_moves` = 0, exit loop
 
 ```
 
 The code is below
 
 ```{code-cell} ipython3
-def run_simulation(num_of_type_0=num_of_type_0,
-                   num_of_type_1=num_of_type_1,
-                   max_iter=100_000,
-                   set_seed=1234):
-
-    # Set the seed for reproducibility
-    seed(set_seed)
-
-    # Create a list of agents 
-    all_agents = []
-    for i in range(num_of_type_0):
-        all_agents.append(Agent(0))
-    for i in range(num_of_type_1):
-        all_agents.append(Agent(1))
+def run_simulation(all_agents, max_iter=100_000):
 
     # Initialize a counter
     count = 1
-
-    # Plot the initial distribution
-    plot_distribution(all_agents, count)
 
     # Loop until no agent wishes to move
     start_time = time.time()
@@ -305,15 +297,14 @@ def run_simulation(num_of_type_0=num_of_type_0,
             relocate(agent, all_agents)
             if agent.location != old_location:
                 number_of_moves += 1
+        # Plot the distribution after this round
+        plot_distribution(all_agents, count)
         # Print outcome and stop loop if no one moved
         print(f'Completed loop {count} with {number_of_moves} moves')
         count += 1
         if number_of_moves == 0:
             break
     elapsed = time.time() - start_time
-
-    # Plot final distribution
-    plot_distribution(all_agents, count)
 
     if count < max_iter:
         print(f'Converged in {elapsed:.2f} seconds after {count} iterations.')
@@ -322,10 +313,27 @@ def run_simulation(num_of_type_0=num_of_type_0,
 
 ```
 
-Let's have a look at the results.
+
+## Results
+
+We are now ready to run our simulation.
+
+First we build a population of agents:
 
 ```{code-cell} ipython3
-run_simulation()
+all_agents = []
+for i in range(num_of_type_0):
+    all_agents.append(Agent(0))
+for i in range(num_of_type_1):
+    all_agents.append(Agent(1))
+
+plot_distribution(all_agents, 0)
+```
+
+Now we run the simulation and look at the results.
+
+```{code-cell} ipython3
+run_simulation(all_agents)
 ```
 
 As discussed above, agents are initially mixed randomly together.
@@ -336,17 +344,27 @@ In this instance, the program terminated after a small number of cycles
 through the set of agents, indicating that all agents had reached a state of
 happiness.
 
-What is striking about the pictures is how rapidly racial integration breaks down.
+We notice that the fully mixed environment rapidly breaks down.
 
-This is despite the fact that people in the model don't actually mind living mixed with the other type.
+We get emergence of at least some segregation.
 
-Even with these preferences, the outcome is a high degree of segregation.
+This is despite the fact that people in the model don't actually mind living
+mixed with the other type.
+
+Even with these preferences, the outcome is some degree of segregation.
+
+(Not a lot of segregation, but we'll see more segregation in later lectures,
+after some modifications.)
 
 
 ## Performance
 
 Our Python code was written for readability, not speed.
 
-This is fine for very small simulations but not for big ones.
+This is fine for very small simulations but not for bigger ones.
+
+That's a problem for us because we want to experiment with some more ideas.
 
 In the following lectures we'll look at strategies for making our code faster.
+
+Then we'll investigate variations that might lead to even more segregation.

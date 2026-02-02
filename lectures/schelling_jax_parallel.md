@@ -286,13 +286,22 @@ def run_jax_simulation(params, max_iter=100_000, seed=42):
 
 ## JAX Parallel Implementation
 
-Now we introduce the parallel algorithm. The key insight is that instead of
-updating agents one at a time, we can:
+Now we introduce the parallel algorithm. 
+
+Our aim is to update all agents at the same time, rather than sequentially.
+
+To do this we
 
 1. **Identify all unhappy agents** in parallel
 2. **Generate candidate locations** for all unhappy agents in parallel
 3. **Test happiness** at all candidate locations in parallel
-4. **Update all agents** simultaneously, using a fixed number of iterations
+4. **Update all agents** simultaneously
+
+Moreover, when we generate candidate locations, we will offer a fixed number to
+all agents.
+
+This allows the parallel threads to do the same amount of work, so they all run
+at the same speed.
 
 This approach is well-suited to GPU execution, where thousands of operations
 can run concurrently.
@@ -302,12 +311,14 @@ can run concurrently.
 The sequential algorithm guarantees that each agent finds a happy location
 before moving on. 
 
-The parallel algorithm instead proposes a fixed number of candidate locations per agent per iteration. 
+The parallel algorithm instead proposes a fixed number of candidate locations
+per agent per iteration. 
 
 If none of the candidates make the agent happy, the agent stays put and tries again next iteration.
 
-This means the parallel algorithm may need more iterations, but each iteration
-is much faster because all work is done in parallel.
+This means the parallel algorithm may need more iterations. 
+
+However, each iteration is faster because all work is done in parallel.
 
 ### Trade-off II
 
@@ -323,13 +334,17 @@ We hope that, nonetheless, the algorithm will converge.
 
 The `update_agent_location` function below performs all computation (generating
 candidates, checking happiness at each candidate) upfront before making the
-final decision about whether to move. This may seem wasteful for agents who are
+final decision about whether to move. 
+
+This may seem wasteful for agents who are
 already happy, but it's actually optimal for parallel execution.
 
 In SIMD/SIMT architectures (GPUs, vectorized CPU operations), all threads
 execute the same instructions in lockstep. Conditional branches like
 `jax.lax.cond` don't skip work—both branches are computed and the result is
-selected afterward. By doing uniform work for all agents and using `jnp.where`
+selected afterward. 
+
+By doing uniform work for all agents and using `jnp.where`
 to select results at the end, we align with how the hardware actually executes
 the code.
 

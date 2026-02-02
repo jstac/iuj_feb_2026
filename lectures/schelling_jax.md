@@ -356,7 +356,7 @@ def simulation_loop(locations, types, key, params, max_iter):
 ```
 
 ```{code-cell} ipython3
-def run_simulation(params, max_iter=100_000, seed=42):
+def run_simulation(params, max_iter=100_000, seed=1234):
     """
     Run the Schelling simulation using JAX.
     """
