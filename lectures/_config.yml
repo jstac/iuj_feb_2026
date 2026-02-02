@@ -25,6 +25,9 @@ execute:
 bibtex_bibfiles:
   - _static/quant-econ.bib
 
+html:
+  baseurl: https://quantecon.github.io/iuj_feb_2026/
+
 latex:
   latex_documents:
     targetname: schelling-workshop.tex
@@ -50,8 +53,18 @@ sphinx:
       dark_logo: quantecon-logo-transparent.png
       header_organisation_url: https://quantecon.org
       header_organisation: QuantEcon
-      repository_url: https://github.com/QuantEcon/schelling-workshop
-      description: A workshop studying the Schelling segregation model with accelerated implementations.
+      repository_url: https://github.com/QuantEcon/iuj_feb_2026
+      nb_repository_url: https://github.com/QuantEcon/iuj_feb_2026
+      nb_branch: main
+      path_to_docs: lectures
+      nb_path_to_notebooks: "notebooks"
+      twitter: quantecon
+      twitter_logo_url: https://assets.quantecon.org/img/qe-twitter-logo.png
+      og_logo_url: https://assets.quantecon.org/img/qe-og-logo.png
+      description: A workshop studying the Schelling segregation model with accelerated implementations using Numba and JAX.
+      keywords: Python, QuantEcon, Schelling Model, Segregation, JAX, Numba, GPU
+      launch_buttons:
+        colab_url: https://colab.research.google.com
     mathjax3_config:
       tex:
         macros:

@@ -7,7 +7,7 @@ on:
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -58,6 +58,22 @@ jobs:
         shell: bash -l {0}
         run: |
           jb build lectures --path-output ./ -n -W --keep-going
+      
+      - name: Copy notebooks for Colab support
+        shell: bash -l {0}
+        run: |
+          mkdir -p notebooks
+          cp _build/jupyter_execute/*.ipynb notebooks/ 2>/dev/null || true
+          echo "Notebooks copied to notebooks/ folder:"
+          ls -la notebooks/
+      
+      - name: Commit notebooks to repo
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add notebooks/
+          git diff --staged --quiet || git commit -m "Update notebooks for Colab [skip ci]"
+          git push
       
       - name: Upload Execution Reports
         uses: actions/upload-artifact@v4
