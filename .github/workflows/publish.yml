@@ -42,8 +42,9 @@ jobs:
       - name: Install JAX with CUDA support
         shell: bash -l {0}
         run: |
-          pip install -U "jax[cuda12]"
+          pip install -U "jax[cuda13]"
           pip install numpyro
+          python scripts/test-jax-install.py
 
       - name: Display Conda Environment Versions
         shell: bash -l {0}
