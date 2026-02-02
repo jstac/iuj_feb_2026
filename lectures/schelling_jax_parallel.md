@@ -32,20 +32,28 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from jax import random, jit, vmap
+from functools import partial
+from typing import NamedTuple
 from numpy.random import uniform
 import time
 ```
 
 ## Parameters
 
-We use the same parameters across all implementations:
+We use the same parameters across all implementations. To keep our functions
+pure, we pack all parameters into a `NamedTuple` that gets passed to functions
+that need them:
 
 ```{code-cell} ipython3
-num_of_type_0 = 1800
-num_of_type_1 = 1800
-n = num_of_type_0 + num_of_type_1
-k = 10                  # number of neighbors
-require_same_type = 4   # threshold for happiness
+class Params(NamedTuple):
+    num_of_type_0: int = 1800    # number of agents of type 0 (orange)
+    num_of_type_1: int = 1800    # number of agents of type 1 (green)
+    k: int = 10                  # number of neighbors
+    require_same_type: int = 4   # threshold for happiness
+    num_candidates: int = 3      # candidate locations per agent per iteration
+
+
+params = Params()
 ```
 
 ## Shared Plotting Function
@@ -76,7 +84,9 @@ def plot_distribution(locations, types, title):
 First, let's define the NumPy version from {doc}`schelling_numpy`:
 
 ```{code-cell} ipython3
-def np_initialize_state():
+def np_initialize_state(params):
+    num_of_type_0, num_of_type_1 = params.num_of_type_0, params.num_of_type_1
+    n = num_of_type_0 + num_of_type_1
     locations = uniform(size=(n, 2))
     types = np.array([0] * num_of_type_0 + [1] * num_of_type_1)
     return locations, types
@@ -86,7 +96,8 @@ def np_get_distances(loc, locations):
     return np.linalg.norm(loc - locations, axis=1)
 
 
-def np_get_neighbors(i, locations):
+def np_get_neighbors(i, locations, params):
+    k = params.k
     loc = locations[i, :]
     distances = np_get_distances(loc, locations)
     distances[i] = np.inf
@@ -94,26 +105,28 @@ def np_get_neighbors(i, locations):
     return indices[:k]
 
 
-def np_is_happy(i, locations, types):
+def np_is_happy(i, locations, types, params):
+    require_same_type = params.require_same_type
     agent_type = types[i]
-    neighbors = np_get_neighbors(i, locations)
+    neighbors = np_get_neighbors(i, locations, params)
     neighbor_types = types[neighbors]
     num_same = np.sum(neighbor_types == agent_type)
     return num_same >= require_same_type
 
 
-def np_update_agent(i, locations, types, max_attempts=10_000):
+def np_update_agent(i, locations, types, params, max_attempts=10_000):
     attempts = 0
-    while not np_is_happy(i, locations, types):
+    while not np_is_happy(i, locations, types, params):
         locations[i, :] = uniform(), uniform()
         attempts += 1
         if attempts >= max_attempts:
             break
 
 
-def run_numpy_simulation(max_iter=100_000, seed=42):
+def run_numpy_simulation(params, max_iter=100_000, seed=42):
+    n = params.num_of_type_0 + params.num_of_type_1
     np.random.seed(seed)
-    locations, types = np_initialize_state()
+    locations, types = np_initialize_state(params)
 
     plot_distribution(locations, types, 'NumPy: Initial distribution')
 
@@ -125,8 +138,8 @@ def run_numpy_simulation(max_iter=100_000, seed=42):
         iteration += 1
         someone_moved = False
         for i in range(n):
-            if not np_is_happy(i, locations, types):
-                np_update_agent(i, locations, types)
+            if not np_is_happy(i, locations, types, params):
+                np_update_agent(i, locations, types, params)
                 someone_moved = True
     elapsed = time.time() - start_time
 
@@ -145,7 +158,9 @@ def run_numpy_simulation(max_iter=100_000, seed=42):
 Next, the JAX version from {doc}`schelling_jax`:
 
 ```{code-cell} ipython3
-def jax_initialize_state(key):
+def jax_initialize_state(key, params):
+    num_of_type_0, num_of_type_1 = params.num_of_type_0, params.num_of_type_1
+    n = num_of_type_0 + num_of_type_1
     locations = random.uniform(key, shape=(n, 2))
     types = jnp.array([0] * num_of_type_0 + [1] * num_of_type_1)
     return locations, types
@@ -157,30 +172,32 @@ def jax_get_distances(loc, locations):
     return jnp.sum(diff**2, axis=1)
 
 
-@jit
-def jax_get_neighbors(loc, agent_idx, locations):
+@partial(jit, static_argnames=('params',))
+def jax_get_neighbors(loc, agent_idx, locations, params):
+    k = params.k
     distances = jax_get_distances(loc, locations)
     distances = distances.at[agent_idx].set(jnp.inf)
     _, indices = jax.lax.top_k(-distances, k)
     return indices
 
 
-@jit
-def jax_is_unhappy(loc, agent_type, agent_idx, locations, types):
-    neighbors = jax_get_neighbors(loc, agent_idx, locations)
+@partial(jit, static_argnames=('params',))
+def jax_is_unhappy(loc, agent_type, agent_idx, locations, types, params):
+    require_same_type = params.require_same_type
+    neighbors = jax_get_neighbors(loc, agent_idx, locations, params)
     neighbor_types = types[neighbors]
     num_same = jnp.sum(neighbor_types == agent_type)
     return num_same < require_same_type
 
 
-@jit
-def jax_update_agent(i, locations, types, key, max_attempts=10_000):
+@partial(jit, static_argnames=('params',))
+def jax_update_agent(i, locations, types, key, params, max_attempts=10_000):
     loc = locations[i, :]
     agent_type = types[i]
 
     def cond_fn(state):
         loc, key, attempts = state
-        return (attempts < max_attempts) & jax_is_unhappy(loc, agent_type, i, locations, types)
+        return (attempts < max_attempts) & jax_is_unhappy(loc, agent_type, i, locations, types, params)
 
     def body_fn(state):
         _, key, attempts = state
@@ -192,10 +209,12 @@ def jax_update_agent(i, locations, types, key, max_attempts=10_000):
     return final_loc, key
 
 
-@jit
-def jax_get_unhappy_agents(locations, types):
+@partial(jit, static_argnames=('params',))
+def jax_get_unhappy_agents(locations, types, params):
+    n = params.num_of_type_0 + params.num_of_type_1
+
     def check_agent(i):
-        return jax_is_unhappy(locations[i], types[i], i, locations, types)
+        return jax_is_unhappy(locations[i], types[i], i, locations, types, params)
 
     all_unhappy = vmap(check_agent)(jnp.arange(n))
     indices = jnp.where(all_unhappy, size=n, fill_value=-1)[0]
@@ -203,34 +222,34 @@ def jax_get_unhappy_agents(locations, types):
     return indices, count
 
 
-def jax_simulation_loop(locations, types, key, max_iter):
+def jax_simulation_loop(locations, types, key, params, max_iter):
     iteration = 0
     while iteration < max_iter:
         print(f'Entering iteration {iteration + 1}')
         iteration += 1
 
-        unhappy, num_unhappy = jax_get_unhappy_agents(locations, types)
+        unhappy, num_unhappy = jax_get_unhappy_agents(locations, types, params)
 
         if num_unhappy == 0:
             break
 
         for j in range(int(num_unhappy)):
             i = int(unhappy[j])
-            new_loc, key = jax_update_agent(i, locations, types, key)
+            new_loc, key = jax_update_agent(i, locations, types, key, params)
             locations = locations.at[i, :].set(new_loc)
 
     return locations, iteration, key
 
 
-def run_jax_simulation(max_iter=100_000, seed=42):
+def run_jax_simulation(params, max_iter=100_000, seed=42):
     key = random.PRNGKey(seed)
     key, init_key = random.split(key)
-    locations, types = jax_initialize_state(init_key)
+    locations, types = jax_initialize_state(init_key, params)
 
     plot_distribution(locations, types, 'JAX Sequential: Initial distribution')
 
     start_time = time.time()
-    locations, iteration, key = jax_simulation_loop(locations, types, key, max_iter)
+    locations, iteration, key = jax_simulation_loop(locations, types, key, params, max_iter)
     elapsed = time.time() - start_time
 
     plot_distribution(locations, types, f'JAX Sequential: Iteration {iteration}')
@@ -266,19 +285,16 @@ the agent happy, the agent stays put and tries again next iteration.
 This means the parallel algorithm may need more iterations, but each iteration
 is much faster because all work is done in parallel.
 
-```{code-cell} ipython3
-num_candidates = 3  # number of candidate locations to try per agent per iteration
-```
-
 ### Core Parallel Functions
 
 ```{code-cell} ipython3
-@jit
-def find_happy_candidate(i, locations, types, key):
+@partial(jit, static_argnames=('params',))
+def find_happy_candidate(i, locations, types, key, params):
     """
     Propose num_candidates random locations for agent i.
     Return the first one where agent is happy, or current location if none work.
     """
+    num_candidates = params.num_candidates
     current_loc = locations[i, :]
     agent_type = types[i]
 
@@ -288,7 +304,7 @@ def find_happy_candidate(i, locations, types, key):
 
     # Check happiness at each candidate location (in parallel)
     def check_candidate(loc):
-        return ~jax_is_unhappy(loc, agent_type, i, locations, types)
+        return ~jax_is_unhappy(loc, agent_type, i, locations, types, params)
 
     happy_at_candidates = vmap(check_candidate)(candidates)
 
@@ -301,14 +317,16 @@ def find_happy_candidate(i, locations, types, key):
     return new_loc
 
 
-@jit
-def parallel_update_step(locations, types, key):
+@partial(jit, static_argnames=('params',))
+def parallel_update_step(locations, types, key, params):
     """
     One step of the parallel algorithm:
     1. Generate keys for all agents
     2. For each agent, find a happy candidate location (in parallel)
     3. Only update unhappy agents
     """
+    n = params.num_of_type_0 + params.num_of_type_1
+
     # Generate keys for all agents
     keys = random.split(key, n + 1)
     key = keys[0]
@@ -316,13 +334,13 @@ def parallel_update_step(locations, types, key):
 
     # For each agent, find a happy candidate location (in parallel)
     def try_move(i):
-        return find_happy_candidate(i, locations, types, agent_keys[i])
+        return find_happy_candidate(i, locations, types, agent_keys[i], params)
 
     new_locations = vmap(try_move)(jnp.arange(n))
 
     # Only update unhappy agents
     def check_agent(i):
-        return jax_is_unhappy(locations[i], types[i], i, locations, types)
+        return jax_is_unhappy(locations[i], types[i], i, locations, types, params)
 
     is_unhappy_mask = vmap(check_agent)(jnp.arange(n))
 
@@ -335,31 +353,31 @@ def parallel_update_step(locations, types, key):
 ### Parallel Simulation Loop
 
 ```{code-cell} ipython3
-def parallel_simulation_loop(locations, types, key, max_iter):
+def parallel_simulation_loop(locations, types, key, params, max_iter):
     iteration = 0
     while iteration < max_iter:
         print(f'Entering iteration {iteration + 1}')
         iteration += 1
 
-        _, num_unhappy = jax_get_unhappy_agents(locations, types)
+        _, num_unhappy = jax_get_unhappy_agents(locations, types, params)
 
         if num_unhappy == 0:
             break
 
-        locations, key = parallel_update_step(locations, types, key)
+        locations, key = parallel_update_step(locations, types, key, params)
 
     return locations, iteration, key
 
 
-def run_parallel_simulation(max_iter=100_000, seed=42):
+def run_parallel_simulation(params, max_iter=100_000, seed=42):
     key = random.PRNGKey(seed)
     key, init_key = random.split(key)
-    locations, types = jax_initialize_state(init_key)
+    locations, types = jax_initialize_state(init_key, params)
 
     plot_distribution(locations, types, 'JAX Parallel: Initial distribution')
 
     start_time = time.time()
-    locations, iteration, key = parallel_simulation_loop(locations, types, key, max_iter)
+    locations, iteration, key = parallel_simulation_loop(locations, types, key, params, max_iter)
     elapsed = time.time() - start_time
 
     plot_distribution(locations, types, f'JAX Parallel: Iteration {iteration}')
@@ -379,21 +397,21 @@ Before timing, we compile all JAX functions:
 ```{code-cell} ipython3
 key = random.PRNGKey(0)
 key, init_key = random.split(key)
-test_locations, test_types = jax_initialize_state(init_key)
+test_locations, test_types = jax_initialize_state(init_key, params)
 
 # Warm up JAX sequential functions
 _ = jax_get_distances(test_locations[0], test_locations)
-_ = jax_get_neighbors(test_locations[0], 0, test_locations)
-_ = jax_is_unhappy(test_locations[0], test_types[0], 0, test_locations, test_types)
-_, _ = jax_get_unhappy_agents(test_locations, test_types)
+_ = jax_get_neighbors(test_locations[0], 0, test_locations, params)
+_ = jax_is_unhappy(test_locations[0], test_types[0], 0, test_locations, test_types, params)
+_, _ = jax_get_unhappy_agents(test_locations, test_types, params)
 key, subkey = random.split(key)
-_, _ = jax_update_agent(0, test_locations, test_types, subkey)
+_, _ = jax_update_agent(0, test_locations, test_types, subkey, params)
 
 # Warm up JAX parallel functions
 key, subkey = random.split(key)
-_ = find_happy_candidate(0, test_locations, test_types, subkey)
+_ = find_happy_candidate(0, test_locations, test_types, subkey, params)
 key, subkey = random.split(key)
-_, _ = parallel_update_step(test_locations, test_types, subkey)
+_, _ = parallel_update_step(test_locations, test_types, subkey, params)
 
 print("JAX functions compiled and ready!")
 ```
@@ -408,7 +426,7 @@ Now let's run all three implementations and compare their performance.
 print("=" * 50)
 print("NUMPY")
 print("=" * 50)
-locations_np, types_np = run_numpy_simulation()
+locations_np, types_np = run_numpy_simulation(params)
 ```
 
 ### JAX Sequential
@@ -417,7 +435,7 @@ locations_np, types_np = run_numpy_simulation()
 print("=" * 50)
 print("JAX SEQUENTIAL")
 print("=" * 50)
-locations_jax, types_jax = run_jax_simulation()
+locations_jax, types_jax = run_jax_simulation(params)
 ```
 
 ### JAX Parallel
@@ -426,7 +444,7 @@ locations_jax, types_jax = run_jax_simulation()
 print("=" * 50)
 print("JAX PARALLEL")
 print("=" * 50)
-locations_par, types_par = run_parallel_simulation()
+locations_par, types_par = run_parallel_simulation(params)
 ```
 
 ## Discussion

@@ -21,15 +21,10 @@ using NumPy arrays and functions.
 In this lecture, we explore [JAX](https://github.com/google/jax), a library
 developed by Google for high-performance numerical computing.
 
-JAX offers several powerful features:
+JAX offers several powerful features, including automatic GPU/TPU acceleration and 
+just-in-time compilation.
 
-1. **GPU/TPU acceleration** — JAX can run your code on GPUs and TPUs with
-   minimal changes
-2. **Automatic differentiation** — JAX can compute gradients automatically
-   (useful for machine learning)
-3. **Functional programming style** — JAX encourages pure functions without
-   side effects
-4. **Just-in-time compilation** — JAX can compile functions for faster execution
+JAX is heavily used for AI workflows but we repurpose it to work with our simulation.
 
 Let's start with some imports:
 
@@ -39,6 +34,8 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from jax import random, jit, vmap
+from functools import partial
+from typing import NamedTuple
 import time
 ```
 
@@ -96,14 +93,18 @@ This explicit handling makes JAX programs reproducible and parallelizable.
 
 ## Parameters
 
-We use the same parameters as before:
+We use the same parameters as before. To keep our functions pure, we pack all
+parameters into a `NamedTuple` that gets passed to functions that need them:
 
 ```{code-cell} ipython3
-num_of_type_0 = 1000    # number of agents of type 0 (orange)
-num_of_type_1 = 1000    # number of agents of type 1 (green)
-n = num_of_type_0 + num_of_type_1  # total number of agents
-k = 10                  # number of agents regarded as neighbors
-require_same_type = 4   # want >= require_same_type neighbors of the same type
+class Params(NamedTuple):
+    num_of_type_0: int = 1000    # number of agents of type 0 (orange)
+    num_of_type_1: int = 1000    # number of agents of type 1 (green)
+    k: int = 10                  # number of agents regarded as neighbors
+    require_same_type: int = 4   # want >= require_same_type neighbors of same type
+
+
+params = Params()
 ```
 
 ## Initialization
@@ -112,19 +113,21 @@ Here's our initialization function. Note that we use `jax.random` instead of
 `numpy.random`:
 
 ```{code-cell} ipython3
-def initialize_state(key):
+def initialize_state(key, params):
     """
     Initialize agent locations and types.
 
     """
+    num_of_type_0, num_of_type_1 = params.num_of_type_0, params.num_of_type_1
+    n = num_of_type_0 + num_of_type_1
     locations = random.uniform(key, shape=(n, 2))
     types = jnp.array([0] * num_of_type_0 + [1] * num_of_type_1)
     return locations, types
 ```
 
-The key difference from NumPy is that we pass a `key` argument to
-`random.uniform`. This makes the random generation deterministic and
-reproducible.
+The key differences from NumPy are that we pass a `key` argument to
+`random.uniform` (making random generation deterministic and reproducible)
+and we pass `params` explicitly rather than relying on global variables.
 
 ## JAX-Compiled Functions
 
@@ -154,8 +157,8 @@ compiler.
 ### Finding Neighbors
 
 ```{code-cell} ipython3
-@jit
-def get_neighbors(loc, agent_idx, locations):
+@partial(jit, static_argnames=('params',))
+def get_neighbors(loc, agent_idx, locations, params):
     """
     Get indices of the k nearest neighbors to a location (excluding agent_idx).
 
@@ -167,7 +170,10 @@ def get_neighbors(loc, agent_idx, locations):
         The index of the agent (excluded from neighbors).
     locations : array of shape (n, 2)
         All agent locations.
+    params : Params
+        Model parameters.
     """
+    k = params.k
     distances = get_distances(loc, locations)
     # Set self-distance to infinity so agent doesn't count as own neighbor
     distances = distances.at[agent_idx].set(jnp.inf)
@@ -183,8 +189,8 @@ index `i` set to infinity.
 ### Checking Unhappiness
 
 ```{code-cell} ipython3
-@jit
-def is_unhappy(loc, agent_type, agent_idx, locations, types):
+@partial(jit, static_argnames=('params',))
+def is_unhappy(loc, agent_type, agent_idx, locations, types, params):
     """
     True if an agent at loc would NOT have enough same-type neighbors.
 
@@ -200,8 +206,11 @@ def is_unhappy(loc, agent_type, agent_idx, locations, types):
         All agent locations.
     types : array of shape (n,)
         All agent types.
+    params : Params
+        Model parameters.
     """
-    neighbors = get_neighbors(loc, agent_idx, locations)
+    require_same_type = params.require_same_type
+    neighbors = get_neighbors(loc, agent_idx, locations, params)
     neighbor_types = types[neighbors]
     num_same = jnp.sum(neighbor_types == agent_type)
     return num_same < require_same_type
@@ -220,8 +229,8 @@ updating the `locations` array on each iteration, it tests candidate locations
 directly and returns only the final location.
 
 ```{code-cell} ipython3
-@jit
-def update_agent(i, locations, types, key, max_attempts=10_000):
+@partial(jit, static_argnames=('params',))
+def update_agent(i, locations, types, key, params, max_attempts=10_000):
     """
     Find a location where agent i is happy.
 
@@ -233,7 +242,7 @@ def update_agent(i, locations, types, key, max_attempts=10_000):
 
     def cond_fn(state):
         loc, key, attempts = state
-        return (attempts < max_attempts) & is_unhappy(loc, agent_type, i, locations, types)
+        return (attempts < max_attempts) & is_unhappy(loc, agent_type, i, locations, types, params)
 
     def body_fn(state):
         _, key, attempts = state
@@ -294,13 +303,15 @@ We separate the core simulation loop from the setup and plotting code. This
 makes it easier to optimize or JIT-compile the loop independently.
 
 ```{code-cell} ipython3
-@jit
-def get_unhappy_agents(locations, types):
+@partial(jit, static_argnames=('params',))
+def get_unhappy_agents(locations, types, params):
     """
     Find indices and count of all unhappy agents using vectorized computation.
     """
+    n = params.num_of_type_0 + params.num_of_type_1
+
     def check_agent(i):
-        return is_unhappy(locations[i], types[i], i, locations, types)
+        return is_unhappy(locations[i], types[i], i, locations, types, params)
 
     all_unhappy = vmap(check_agent)(jnp.arange(n))
     indices = jnp.where(all_unhappy, size=n, fill_value=-1)[0]
@@ -308,7 +319,7 @@ def get_unhappy_agents(locations, types):
     return indices, count
 
 
-def simulation_loop(locations, types, key, max_iter):
+def simulation_loop(locations, types, key, params, max_iter):
     """
     Run the simulation loop until convergence or max iterations.
 
@@ -327,7 +338,7 @@ def simulation_loop(locations, types, key, max_iter):
         iteration += 1
 
         # Find unhappy agents using vectorized computation
-        unhappy, num_unhappy = get_unhappy_agents(locations, types)
+        unhappy, num_unhappy = get_unhappy_agents(locations, types, params)
 
         # Check if everyone is happy
         if num_unhappy == 0:
@@ -336,25 +347,25 @@ def simulation_loop(locations, types, key, max_iter):
         # Update only the unhappy agents
         for j in range(int(num_unhappy)):
             i = int(unhappy[j])
-            new_loc, key = update_agent(i, locations, types, key)
+            new_loc, key = update_agent(i, locations, types, key, params)
             locations = locations.at[i, :].set(new_loc)
 
     return locations, iteration, key
 ```
 
 ```{code-cell} ipython3
-def run_simulation(max_iter=100_000, seed=42):
+def run_simulation(params, max_iter=100_000, seed=42):
     """
     Run the Schelling simulation using JAX.
     """
     key = random.PRNGKey(seed)
     key, init_key = random.split(key)
-    locations, types = initialize_state(init_key)
+    locations, types = initialize_state(init_key, params)
 
     plot_distribution(locations, types, 'Initial distribution')
 
     start_time = time.time()
-    locations, iteration, key = simulation_loop(locations, types, key, max_iter)
+    locations, iteration, key = simulation_loop(locations, types, key, params, max_iter)
     elapsed = time.time() - start_time
 
     plot_distribution(locations, types, f'Iteration {iteration}')
@@ -389,15 +400,15 @@ functions:
 # (JAX recompiles when array shapes change)
 key = random.PRNGKey(42)
 key, init_key = random.split(key)
-test_locations, test_types = initialize_state(init_key)
+test_locations, test_types = initialize_state(init_key, params)
 
 # Call each function once to compile it
 _ = get_distances(test_locations[0], test_locations)
-_ = get_neighbors(test_locations[0], 0, test_locations)
-_ = is_unhappy(test_locations[0], test_types[0], 0, test_locations, test_types)
-_, _ = get_unhappy_agents(test_locations, test_types)
+_ = get_neighbors(test_locations[0], 0, test_locations, params)
+_ = is_unhappy(test_locations[0], test_types[0], 0, test_locations, test_types, params)
+_, _ = get_unhappy_agents(test_locations, test_types, params)
 key, subkey = random.split(key)
-_, _ = update_agent(0, test_locations, test_types, subkey)
+_, _ = update_agent(0, test_locations, test_types, subkey, params)
 
 print("JAX functions compiled and ready!")
 ```
@@ -407,7 +418,7 @@ print("JAX functions compiled and ready!")
 Now let's run the simulation:
 
 ```{code-cell} ipython3
-locations, types = run_simulation()
+locations, types = run_simulation(params)
 ```
 
 ## Tips for Using JAX
