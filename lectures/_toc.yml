@@ -7,3 +7,4 @@ parts:
   - file: schelling
   - file: schelling_numpy
   - file: schelling_jax
+  - file: schelling_jax_parallel
