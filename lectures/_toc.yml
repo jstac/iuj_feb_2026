@@ -9,3 +9,4 @@ parts:
   - file: schelling_numpy
   - file: schelling_jax
   - file: schelling_jax_parallel
+  - file: schelling_shocks

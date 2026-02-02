@@ -100,8 +100,8 @@ parameters into a `NamedTuple` that gets passed to functions that need them:
 class Params(NamedTuple):
     num_of_type_0: int = 1000    # number of agents of type 0 (orange)
     num_of_type_1: int = 1000    # number of agents of type 1 (green)
-    k: int = 10                  # number of agents regarded as neighbors
-    require_same_type: int = 4   # want >= require_same_type neighbors of same type
+    num_neighbors: int = 10      # number of agents regarded as neighbors
+    max_other_type: int = 6     # max number of different-type neighbors tolerated
 
 
 params = Params()
@@ -160,7 +160,7 @@ compiler.
 @partial(jit, static_argnames=('params',))
 def get_neighbors(loc, agent_idx, locations, params):
     """
-    Get indices of the k nearest neighbors to a location (excluding agent_idx).
+    Get indices of the num_neighbors nearest neighbors to a location (excluding agent_idx).
 
     Parameters
     ----------
@@ -173,12 +173,12 @@ def get_neighbors(loc, agent_idx, locations, params):
     params : Params
         Model parameters.
     """
-    k = params.k
+    num_neighbors = params.num_neighbors
     distances = get_distances(loc, locations)
     # Set self-distance to infinity so agent doesn't count as own neighbor
     distances = distances.at[agent_idx].set(jnp.inf)
-    # Use top_k on negated distances to find k smallest in O(n) instead of O(n log n)
-    _, indices = jax.lax.top_k(-distances, k)
+    # Use top_k on negated distances to find num_neighbors smallest in O(n) instead of O(n log n)
+    _, indices = jax.lax.top_k(-distances, num_neighbors)
     return indices
 ```
 
@@ -192,7 +192,7 @@ index `i` set to infinity.
 @partial(jit, static_argnames=('params',))
 def is_unhappy(loc, agent_type, agent_idx, locations, types, params):
     """
-    True if an agent at loc would NOT have enough same-type neighbors.
+    True if an agent at loc would have too many different-type neighbors.
 
     Parameters
     ----------
@@ -209,11 +209,11 @@ def is_unhappy(loc, agent_type, agent_idx, locations, types, params):
     params : Params
         Model parameters.
     """
-    require_same_type = params.require_same_type
+    max_other_type = params.max_other_type
     neighbors = get_neighbors(loc, agent_idx, locations, params)
     neighbor_types = types[neighbors]
-    num_same = jnp.sum(neighbor_types == agent_type)
-    return num_same < require_same_type
+    num_other = jnp.sum(neighbor_types != agent_type)
+    return num_other > max_other_type
 ```
 
 This function takes the location and type as explicit arguments, rather than
@@ -314,8 +314,10 @@ def get_unhappy_agents(locations, types, params):
         return is_unhappy(locations[i], types[i], i, locations, types, params)
 
     all_unhappy = vmap(check_agent)(jnp.arange(n))
+    # jnp.where with size= returns fixed-length array (required for JIT)
+    # Pads with fill_value=-1 when fewer than n agents are unhappy
     indices = jnp.where(all_unhappy, size=n, fill_value=-1)[0]
-    count = jnp.sum(all_unhappy)
+    count = jnp.sum(all_unhappy)  # number of valid indices
     return indices, count
 
 

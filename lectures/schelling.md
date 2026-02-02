@@ -12,13 +12,13 @@ kernelspec:
 ---
 
 
-# Racial Segregation
+# The Schelling Model
 
 
 ## Outline
 
 In 1969, Thomas C. Schelling developed a simple but striking model of racial
-segregation {cite}`Schelling1969`.
+segregation ([Schelling, 1969](https://en.wikipedia.org/wiki/Schelling%27s_model_of_segregation)).
 
 His model studies the dynamics of racially mixed neighborhoods.
 
@@ -85,14 +85,14 @@ $0 < x, y < 1$.
 
 ### Preferences
 
-We will say that an agent is *happy* if 4 or more of her 10 nearest neighbors are of the same type.
+We will say that an agent is *happy* if no more than 6 of her 10 nearest neighbors are of a different type.
 
 An agent who is not happy is called *unhappy*.
 
 For example,
 
 *  if an agent is orange and 6 of her 10 nearest neighbors are green, then she is happy.
-*  if an agent is green and 8 of her 10 nearest neighbors are orange, then she is unhappy.
+*  if an agent is green and 7 of her 10 nearest neighbors are orange, then she is unhappy.
 
 'Nearest' is in terms of [Euclidean distance](https://en.wikipedia.org/wiki/Euclidean_distance).
 
@@ -106,7 +106,7 @@ Let's set up the parameters for our simulation:
 num_of_type_0 = 1000    # number of agents of type 0 (orange)
 num_of_type_1 = 1000    # number of agents of type 1 (green)
 num_neighbors = 10      # number of agents viewed as neighbors
-require_same_type = 4   # number of neighbors that must be same type for happiness
+max_other_type = 6      # max number of different-type neighbors tolerated
 ```
 
 +++
@@ -183,8 +183,8 @@ def get_distance(agent, other_agent):
 
 def happy(agent, all_agents):
     """
-    True if the number of neighbors with the same type as agent is greater than
-    or equal to require_same_type.
+    True if the number of neighbors with a different type is not more than
+    max_other_type.
     """
 
     # Set up a list of pairs (distance, other_agent) that records the
@@ -204,9 +204,9 @@ def happy(agent, all_agents):
     neighbor_pairs = distances[:num_neighbors]
     neighbors = [neighbor for d, neighbor in neighbor_pairs]
 
-    # Count how many neighbors have the same type as self
-    num_same_type = sum(agent.type == neighbor.type for neighbor in neighbors)
-    return num_same_type >= require_same_type
+    # Count how many neighbors have a different type
+    num_other_type = sum(agent.type != neighbor.type for neighbor in neighbors)
+    return num_other_type <= max_other_type
 
 
 def relocate(agent, all_agents):
@@ -347,10 +347,3 @@ Our Python code was written for readability, not speed.
 This is fine for very small simulations but not for big ones.
 
 In the following lectures we'll look at strategies for making our code faster.
-
-
-## References
-
-```{bibliography}
-:filter: docname in docnames
-```

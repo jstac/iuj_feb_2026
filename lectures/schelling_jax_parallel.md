@@ -48,8 +48,8 @@ that need them:
 class Params(NamedTuple):
     num_of_type_0: int = 1800    # number of agents of type 0 (orange)
     num_of_type_1: int = 1800    # number of agents of type 1 (green)
-    k: int = 10                  # number of neighbors
-    require_same_type: int = 4   # threshold for happiness
+    num_neighbors: int = 10      # number of neighbors
+    max_other_type: int = 6     # max number of different-type neighbors tolerated
     num_candidates: int = 3      # candidate locations per agent per iteration
 
 
@@ -97,21 +97,21 @@ def np_get_distances(loc, locations):
 
 
 def np_get_neighbors(i, locations, params):
-    k = params.k
+    num_neighbors = params.num_neighbors
     loc = locations[i, :]
     distances = np_get_distances(loc, locations)
     distances[i] = np.inf
     indices = np.argsort(distances)
-    return indices[:k]
+    return indices[:num_neighbors]
 
 
 def np_is_happy(i, locations, types, params):
-    require_same_type = params.require_same_type
+    max_other_type = params.max_other_type
     agent_type = types[i]
     neighbors = np_get_neighbors(i, locations, params)
     neighbor_types = types[neighbors]
-    num_same = np.sum(neighbor_types == agent_type)
-    return num_same >= require_same_type
+    num_other = np.sum(neighbor_types != agent_type)
+    return num_other <= max_other_type
 
 
 def np_update_agent(i, locations, types, params, max_attempts=10_000):
@@ -174,20 +174,20 @@ def jax_get_distances(loc, locations):
 
 @partial(jit, static_argnames=('params',))
 def jax_get_neighbors(loc, agent_idx, locations, params):
-    k = params.k
+    num_neighbors = params.num_neighbors
     distances = jax_get_distances(loc, locations)
     distances = distances.at[agent_idx].set(jnp.inf)
-    _, indices = jax.lax.top_k(-distances, k)
+    _, indices = jax.lax.top_k(-distances, num_neighbors)
     return indices
 
 
 @partial(jit, static_argnames=('params',))
 def jax_is_unhappy(loc, agent_type, agent_idx, locations, types, params):
-    require_same_type = params.require_same_type
+    max_other_type = params.max_other_type
     neighbors = jax_get_neighbors(loc, agent_idx, locations, params)
     neighbor_types = types[neighbors]
-    num_same = jnp.sum(neighbor_types == agent_type)
-    return num_same < require_same_type
+    num_other = jnp.sum(neighbor_types != agent_type)
+    return num_other > max_other_type
 
 
 @partial(jit, static_argnames=('params',))
@@ -217,8 +217,10 @@ def jax_get_unhappy_agents(locations, types, params):
         return jax_is_unhappy(locations[i], types[i], i, locations, types, params)
 
     all_unhappy = vmap(check_agent)(jnp.arange(n))
+    # jnp.where with size= returns fixed-length array (required for JIT)
+    # Pads with fill_value=-1 when fewer than n agents are unhappy
     indices = jnp.where(all_unhappy, size=n, fill_value=-1)[0]
-    count = jnp.sum(all_unhappy)
+    count = jnp.sum(all_unhappy)  # number of valid indices
     return indices, count
 
 

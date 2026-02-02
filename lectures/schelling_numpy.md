@@ -50,7 +50,7 @@ num_of_type_0 = 1000    # number of agents of type 0 (orange)
 num_of_type_1 = 1000    # number of agents of type 1 (green)
 n = num_of_type_0 + num_of_type_1  # total number of agents
 num_neighbors = 10      # number of agents viewed as neighbors
-require_same_type = 4   # want >= require_same_type neighbors of the same type
+max_other_type = 6      # max number of different-type neighbors tolerated
 ```
 
 Here's a function to initialize the state with random locations and types:
@@ -152,12 +152,12 @@ An agent is happy if enough of their neighbors share their type:
 
 ```{code-cell} ipython3
 def is_happy(i, locations, types):
-    " True if agent i has at least require_same_type neighbors of the same type. "
+    " True if agent i has no more than max_other_type neighbors of a different type. "
     agent_type = types[i]
     neighbors = get_neighbors(i, locations)
     neighbor_types = types[neighbors]
-    num_same = np.sum(neighbor_types == agent_type)
-    return num_same >= require_same_type
+    num_other = np.sum(neighbor_types != agent_type)
+    return num_other <= max_other_type
 ```
 
 Let's walk through this function step by step:
@@ -181,7 +181,7 @@ Let's walk through this function step by step:
    is treated as 1 and `False` as 0, so summing a boolean array counts the
    `True` entries.
 
-6. Finally, we check if this count meets the threshold `require_same_type`.
+6. Finally, we check if this count is within the tolerance `max_other_type`.
 
 ```{code-cell} ipython3
 # Check if agent 0 is happy
@@ -327,26 +327,6 @@ locations, types = run_simulation()
 
 We see the same phenomenon as in the class-based version: starting from a
 random mixed distribution, agents self-organize into segregated clusters.
-
-## Exercises
-
-```{exercise-start}
-:label: schelling_numpy_ex1
-```
-
-Modify `run_simulation` to add a `flip_prob` parameter.
-
-After each agent update, flip the agent's type with probability `flip_prob`.
-
-We can imagine that, every so often, an agent moves to a different city and,
-with small probability, is replaced by an agent of the other type.
-
-Run the simulation with `flip_prob=0.01` and observe how this additional
-randomness affects the dynamics. Does the system still converge? What happens
-to the segregation patterns?
-
-```{exercise-end}
-```
 
 ```{solution-start} schelling_numpy_ex1
 :class: dropdown
