@@ -33,7 +33,7 @@ latex:
     targetname: schelling-workshop.tex
 
 sphinx:
-  extra_extensions: [sphinx_multitoc_numbering, sphinx_exercise, sphinx_togglebutton, sphinx_proof]
+  extra_extensions: [sphinx_multitoc_numbering, sphinx_exercise, sphinx_togglebutton, sphinx_proof, sphinx_tojupyter]
   config:
     bibtex_reference_style: author_year
     nb_render_image_options:
@@ -71,3 +71,17 @@ sphinx:
           "argmax": "arg\\,max"
           "argmin": "arg\\,min"
     mathjax_path: https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+    # sphinx-tojupyter (for building download notebooks)
+    tojupyter_static_file_path: ["_static"]
+    tojupyter_target_html: true
+    tojupyter_urlpath: "https://quantecon.github.io/iuj_feb_2026/"
+    tojupyter_image_urlpath: "https://quantecon.github.io/iuj_feb_2026/_static/"
+    tojupyter_lang_synonyms: ["ipython", "ipython3", "python"]
+    tojupyter_kernels:
+      python3:
+        kernelspec:
+          display_name: "Python"
+          language: python3
+          name: python3
+        file_extension: ".py"
+    tojupyter_images_markdown: true
