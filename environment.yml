@@ -1,0 +1,26 @@
+name: quantecon
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - anaconda
+  - pip
+  - numba
+  - numpy
+  - scipy
+  - matplotlib
+  - pandas
+  - jupyterlab
+  - ipython
+  - ipykernel
+  - jupyter-book>=1.0.0,<2
+  - sphinx-proof
+  - sphinx_exercise
+  - sphinx_togglebutton
+  - sphinx-multitoc-numbering
+  - sphinxcontrib-bibtex
+  - quantecon_book_theme>=0.8.0
+  - sphinx-tojupyter
+  - docutils
+  - pip:
+    - quantecon
